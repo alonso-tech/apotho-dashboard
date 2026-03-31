@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { HomeIcon, BuildingIcon } from "lucide-react";
+import { HomeIcon, BuildingIcon, TargetIcon, CheckSquareIcon } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -30,22 +30,33 @@ export async function AppSidebar() {
       </SidebarHeader>
 
       <SidebarContent>
+        {/* Main nav */}
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton
-                  render={<Link href="/" />}
-                  tooltip="Portfolio"
-                >
+                <SidebarMenuButton render={<Link href="/" />} tooltip="Portfolio">
                   <HomeIcon />
                   <span>Portfolio</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton render={<Link href="/my-rocks" />} tooltip="My Rocks">
+                  <TargetIcon />
+                  <span>My Rocks</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton render={<Link href="/my-todos" />} tooltip="My To-Dos">
+                  <CheckSquareIcon />
+                  <span>My To-Dos</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
 
+        {/* Businesses */}
         <SidebarGroup>
           <SidebarGroupLabel>Businesses</SidebarGroupLabel>
           <SidebarGroupContent>
