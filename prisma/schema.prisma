@@ -22,6 +22,10 @@ model User {
 
   // App relations
   ownedBusinesses BusinessOwner[]
+  rocks           Rock[]
+  todos           Todo[]
+  meetingSegues   MeetingSegue[]
+  segueRatings    MeetingRating[]
 }
 
 model Business {
@@ -33,6 +37,10 @@ model Business {
   updatedAt   DateTime @updatedAt
 
   owners      BusinessOwner[]
+  rocks       Rock[]
+  todos       Todo[]
+  meetings    Meeting[]
+  measurables Measurable[]
 }
 
 model BusinessOwner {
@@ -48,7 +56,123 @@ model BusinessOwner {
   @@unique([userId, businessId])
 }
 
-// NextAuth required models (needed by PrismaAdapter even with JWT strategy)
+// ─── Rocks ────────────────────────────────────────────────────────────────────
+
+model Rock {
+  id         String    @id @default(cuid())
+  title      String
+  description String?
+  quarter    Int       // 1-4
+  year       Int
+  done       Boolean   @default(false)
+  businessId String
+  ownerId    String
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  business   Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  owner      User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+}
+
+// ─── Todos ────────────────────────────────────────────────────────────────────
+
+model Todo {
+  id         String    @id @default(cuid())
+  title      String
+  done       Boolean   @default(false)
+  dueDate    DateTime?
+  businessId String
+  ownerId    String
+  meetingId  String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  business   Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  owner      User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  meeting    Meeting?  @relation(fields: [meetingId], references: [id])
+}
+
+// ─── Meetings ─────────────────────────────────────────────────────────────────
+
+model Meeting {
+  id          String    @id @default(cuid())
+  businessId  String
+  date        DateTime  @default(now())
+  startedAt   DateTime  @default(now())
+  endedAt     DateTime?
+  avgRating   Float?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  business    Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  segues      MeetingSegue[]
+  issues      MeetingIssue[]
+  ratings     MeetingRating[]
+  todos       Todo[]
+}
+
+model MeetingSegue {
+  id        String  @id @default(cuid())
+  meetingId String
+  userId    String
+  personal  String
+  professional String
+
+  meeting   Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model MeetingIssue {
+  id        String   @id @default(cuid())
+  meetingId String
+  title     String
+  notes     String?
+  resolved  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  meeting   Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+}
+
+model MeetingRating {
+  id        String  @id @default(cuid())
+  meetingId String
+  userId    String
+  rating    Int     // 1-10
+
+  meeting   Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─── Scorecard / Measurables ──────────────────────────────────────────────────
+
+model Measurable {
+  id         String   @id @default(cuid())
+  businessId String
+  name       String
+  goal       String
+  unit       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  business   Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  entries    MeasurableEntry[]
+}
+
+model MeasurableEntry {
+  id           String   @id @default(cuid())
+  measurableId String
+  weekOf       DateTime // Monday of the week
+  actual       String
+  onTrack      Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  measurable   Measurable @relation(fields: [measurableId], references: [id], onDelete: Cascade)
+
+  @@unique([measurableId, weekOf])
+}
+
+// ─── NextAuth required models ─────────────────────────────────────────────────
+
 model Account {
   id                String  @id @default(cuid())
   userId            String
