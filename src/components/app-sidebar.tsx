@@ -23,10 +23,15 @@ export async function AppSidebar() {
     orderBy: { name: "asc" },
   });
 
-  // Check if user is an integrator on any rock
-  const isIntegrator = session?.user?.id
-    ? await prisma.rock.findFirst({ where: { integratorId: session.user.id } })
-    : null;
+  // Check if user is an integrator on any rock (wrapped in try/catch for resilience)
+  let isIntegrator = null;
+  try {
+    isIntegrator = session?.user?.id
+      ? await prisma.rock.findFirst({ where: { integratorId: session.user.id } })
+      : null;
+  } catch {
+    // integratorId column may not exist yet during migration
+  }
 
   return (
     <Sidebar>
