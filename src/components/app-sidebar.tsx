@@ -35,6 +35,22 @@ export async function AppSidebar() {
       </SidebarHeader>
 
       <SidebarContent>
+        {/* Integrator — always at top for integrators */}
+        {isIntegrator && (
+          <SidebarGroup>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton render={<Link href="/integrator" />} tooltip="Integrator Board">
+                    <LayoutDashboardIcon />
+                    <span className="font-semibold">Integrator Board</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
+
         {/* Main nav */}
         <SidebarGroup>
           <SidebarGroupContent>
@@ -57,14 +73,6 @@ export async function AppSidebar() {
                   <span>My To-Dos</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
-              {isIntegrator && (
-                <SidebarMenuItem>
-                  <SidebarMenuButton render={<Link href="/integrator" />} tooltip="Integrator">
-                    <LayoutDashboardIcon />
-                    <span>Integrator</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
