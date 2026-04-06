@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { HomeIcon, BuildingIcon, TargetIcon, CheckSquareIcon } from "lucide-react";
+import { HomeIcon, BuildingIcon, TargetIcon, CheckSquareIcon, LayoutDashboardIcon } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -22,6 +22,11 @@ export async function AppSidebar() {
   const businesses = await prisma.business.findMany({
     orderBy: { name: "asc" },
   });
+
+  // Check if user is an integrator on any rock
+  const isIntegrator = session?.user?.id
+    ? await prisma.rock.findFirst({ where: { integratorId: session.user.id } })
+    : null;
 
   return (
     <Sidebar>
@@ -52,6 +57,14 @@ export async function AppSidebar() {
                   <span>My To-Dos</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+              {isIntegrator && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton render={<Link href="/integrator" />} tooltip="Integrator">
+                    <LayoutDashboardIcon />
+                    <span>Integrator</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
