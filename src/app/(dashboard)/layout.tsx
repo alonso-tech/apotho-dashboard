@@ -25,7 +25,7 @@ export default async function DashboardLayout({
             Apotho Dashboard
           </span>
         </header>
-        <div className="flex flex-1 flex-col gap-4 p-4">{children}</div>
+        <div className="flex flex-1 flex-col gap-4 p-4 min-h-0">{children}</div>
       </SidebarInset>
     </>
   );

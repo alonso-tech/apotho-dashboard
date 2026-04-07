@@ -90,7 +90,7 @@ export function IntegratorBoard({
       </div>
 
       {/* Kanban board */}
-      <div className="flex gap-4 overflow-x-auto flex-1 min-h-0 pb-4">
+      <div className="flex gap-3 flex-1 min-h-0 pb-4">
         {columns.length === 0 && (
           <p className="text-sm text-muted-foreground py-8">
             No rocks found for this quarter.
@@ -102,7 +102,7 @@ export function IntegratorBoard({
           return (
             <div
               key={col.businessSlug}
-              className="flex flex-col min-w-[300px] max-w-[340px] bg-muted/30 rounded-lg border shrink-0"
+              className="flex flex-col flex-1 min-w-0 basis-0 bg-muted/30 rounded-lg border min-h-0"
             >
               {/* Column header */}
               <div className="flex items-center gap-2 px-3 py-2.5 border-b bg-muted/50 rounded-t-lg">
