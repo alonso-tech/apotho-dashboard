@@ -8,17 +8,7 @@ import {
   SidebarMenu,
 } from "@/components/ui/sidebar";
 
-interface Business {
-  id: string;
-  name: string;
-  slug: string;
-}
-
-interface BusinessSwitcherProps {
-  businesses: Business[];
-}
-
-export function BusinessSwitcher({ businesses: _ }: BusinessSwitcherProps) {
+export function BusinessSwitcher(_props: { businesses: unknown[] }) {
   return (
     <SidebarMenu>
       <SidebarMenuItem>
