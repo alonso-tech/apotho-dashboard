@@ -8,7 +8,8 @@ import {
   SidebarMenu,
 } from "@/components/ui/sidebar";
 
-export function BusinessSwitcher(_props: { businesses: unknown[] }) {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function BusinessSwitcher({ businesses }: { businesses: unknown[] }) {
   return (
     <SidebarMenu>
       <SidebarMenuItem>
