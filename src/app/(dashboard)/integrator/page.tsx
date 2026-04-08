@@ -77,6 +77,20 @@ export default async function IntegratorPage({
     });
   }
 
+  // Totals across open + completed for accurate progress
+  const allCounts = await prisma.rock.groupBy({
+    by: ["done"],
+    where: {
+      integratorId: session.user.id,
+      quarter: selectedQ,
+      year: selectedYear,
+    },
+    _count: { _all: true },
+  });
+  const doneRocksTotal = allCounts.find((c) => c.done)?._count._all ?? 0;
+  const totalRocksAll =
+    (allCounts.find((c) => !c.done)?._count._all ?? 0) + doneRocksTotal;
+
   // Get available quarters for the filter
   const quarters = await prisma.rock.groupBy({
     by: ["quarter", "year"],
@@ -106,8 +120,8 @@ export default async function IntegratorPage({
         quarters={quarters.map((q) => ({ quarter: q.quarter, year: q.year }))}
         selectedQ={selectedQ}
         selectedYear={selectedYear}
-        totalRocks={rocks.length}
-        doneRocks={rocks.filter((r) => r.done).length}
+        totalRocks={totalRocksAll}
+        doneRocks={doneRocksTotal}
       />
     </div>
   );
