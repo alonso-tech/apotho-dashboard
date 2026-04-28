@@ -4,20 +4,29 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { CheckCircle2Icon, ArrowLeftIcon, BuildingIcon } from "lucide-react";
+import { isAdmin } from "@/lib/access";
 
 export default async function CompletedRocksPage() {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return notFound();
 
-  const integratorCheck = await prisma.rock.findFirst({
-    where: { integratorId: session.user.id },
-  });
-  if (!integratorCheck) return notFound();
+  const isAdminUser = isAdmin(session.user.role);
+  if (!isAdminUser) {
+    const integratorCheck = await prisma.rock.findFirst({
+      where: { integratorId: session.user.id },
+    });
+    if (!integratorCheck) return notFound();
+  }
+
+  const integratorFilter = isAdminUser
+    ? { integratorId: { not: null } }
+    : { integratorId: session.user.id };
 
   const rocks = await prisma.rock.findMany({
-    where: { integratorId: session.user.id, done: true },
+    where: { ...integratorFilter, done: true },
     include: {
       owner: { select: { name: true } },
+      owners: { select: { name: true } },
       business: { select: { name: true, slug: true } },
     },
     orderBy: [{ year: "desc" }, { quarter: "desc" }, { updatedAt: "desc" }],
@@ -75,7 +84,7 @@ export default async function CompletedRocksPage() {
                 <div className="flex items-center gap-2 text-xs text-muted-foreground mt-auto pt-2 border-t">
                   <BuildingIcon className="h-3 w-3" />
                   <span>{rock.business.name}</span>
-                  <span className="ml-auto">{rock.owner.name}</span>
+                  <span className="ml-auto">{rock.owners.length > 0 ? rock.owners.map((o) => o.name).join(", ") : rock.owner.name}</span>
                 </div>
               </Link>
             ))}

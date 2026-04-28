@@ -14,5 +14,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!sign-in|api/auth|api/seed-q2|api/assign-integrator|api/audit-rocks|api/debug|_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!sign-in|api/auth|api/seed-q2|api/assign-integrator|api/audit-rocks|api/debug|api/sync-scorecard|api/financials|_next/static|_next/image|favicon.ico).*)"],
 };

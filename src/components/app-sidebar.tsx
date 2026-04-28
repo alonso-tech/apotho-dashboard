@@ -2,7 +2,8 @@ import Link from "next/link";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { HomeIcon, BuildingIcon, TargetIcon, CheckSquareIcon, LayoutDashboardIcon } from "lucide-react";
+import { getVisibleBusinesses, isAdmin } from "@/lib/access";
+import { HomeIcon, BuildingIcon, TargetIcon, CheckSquareIcon, LayoutDashboardIcon, UsersIcon } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -19,18 +20,21 @@ import { SidebarUser } from "@/components/sidebar-user";
 
 export async function AppSidebar() {
   const session = await getServerSession(authOptions);
-  const businesses = await prisma.business.findMany({
-    orderBy: { name: "asc" },
-  });
+  const businesses = session?.user?.id
+    ? await getVisibleBusinesses(session.user.id, session.user.role)
+    : await prisma.business.findMany({ orderBy: { name: "asc" } });
 
-  // Check if user is an integrator on any rock (wrapped in try/catch for resilience)
-  let isIntegrator = null;
-  try {
-    isIntegrator = session?.user?.id
-      ? await prisma.rock.findFirst({ where: { integratorId: session.user.id } })
-      : null;
-  } catch {
-    // integratorId column may not exist yet during migration
+  // Show integrator board for admins (integrator/visionary) or users who are integrator on any rock
+  let showIntegratorBoard = isAdmin(session?.user?.role);
+  if (!showIntegratorBoard) {
+    try {
+      const rockCheck = session?.user?.id
+        ? await prisma.rock.findFirst({ where: { integratorId: session.user.id } })
+        : null;
+      showIntegratorBoard = !!rockCheck;
+    } catch {
+      // integratorId column may not exist yet during migration
+    }
   }
 
   return (
@@ -41,7 +45,7 @@ export async function AppSidebar() {
 
       <SidebarContent>
         {/* Integrator — always at top for integrators */}
-        {isIntegrator && (
+        {showIntegratorBoard && (
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu>
@@ -78,6 +82,14 @@ export async function AppSidebar() {
                   <span>My To-Dos</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+              {isAdmin(session?.user?.role) && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton render={<Link href="/admin/users" />} tooltip="Manage Users">
+                    <UsersIcon />
+                    <span>Manage Users</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

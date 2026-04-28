@@ -22,6 +22,30 @@ export async function createMeasurable(formData: FormData) {
   if (biz) revalidatePath(`/${biz.slug}/scorecard`);
 }
 
+export async function updateMeasurable(
+  measurableId: string,
+  name: string,
+  goal: string,
+  unit: string | null,
+  goalDirection?: string
+) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) throw new Error("Unauthorized");
+
+  const m = await prisma.measurable.findUnique({
+    where: { id: measurableId },
+    include: { business: true },
+  });
+  if (!m) throw new Error("Measurable not found");
+
+  await prisma.measurable.update({
+    where: { id: measurableId },
+    data: { name, goal, unit, ...(goalDirection ? { goalDirection } : {}) },
+  });
+
+  revalidatePath(`/${m.business.slug}/scorecard`);
+}
+
 export async function deleteMeasurable(measurableId: string) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) throw new Error("Unauthorized");
@@ -34,6 +58,28 @@ export async function deleteMeasurable(measurableId: string) {
 
   await prisma.measurable.delete({ where: { id: measurableId } });
   revalidatePath(`/${m.business.slug}/scorecard`);
+}
+
+export async function reorderMeasurables(orderedIds: string[]) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) throw new Error("Unauthorized");
+
+  // Update sortOrder for each measurable
+  for (let i = 0; i < orderedIds.length; i++) {
+    await prisma.measurable.update({
+      where: { id: orderedIds[i] },
+      data: { sortOrder: i },
+    });
+  }
+
+  // Get business slug for revalidation
+  if (orderedIds.length > 0) {
+    const m = await prisma.measurable.findUnique({
+      where: { id: orderedIds[0] },
+      include: { business: true },
+    });
+    if (m) revalidatePath(`/${m.business.slug}/scorecard`);
+  }
 }
 
 export async function saveEntry(formData: FormData) {
@@ -54,10 +100,21 @@ export async function saveEntry(formData: FormData) {
   });
   if (!measurable) throw new Error("Measurable not found");
 
-  // Determine on track: parse numbers and compare
+  // Determine on track based on goal direction
   const actualNum = parseFloat(actual);
-  const goalNum = parseFloat(measurable.goal);
-  const onTrack = !isNaN(actualNum) && !isNaN(goalNum) ? actualNum >= goalNum : false;
+  const goalNum = parseFloat(measurable.goal.replace(/,/g, ""));
+  const dir = measurable.goalDirection || "gte";
+  let onTrack = false;
+  if (!isNaN(actualNum) && !isNaN(goalNum)) {
+    switch (dir) {
+      case "gte": onTrack = actualNum >= goalNum; break;
+      case "lte": onTrack = actualNum <= goalNum; break;
+      case "gt":  onTrack = actualNum > goalNum; break;
+      case "lt":  onTrack = actualNum < goalNum; break;
+      case "eq":  onTrack = actualNum === goalNum; break;
+      default:    onTrack = actualNum >= goalNum;
+    }
+  }
 
   await prisma.measurableEntry.upsert({
     where: { measurableId_weekOf: { measurableId, weekOf } },

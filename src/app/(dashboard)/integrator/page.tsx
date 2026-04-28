@@ -2,7 +2,10 @@ import { notFound } from "next/navigation";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { getCurrentQuarter } from "@/lib/quarter";
 import { IntegratorBoard } from "@/components/rocks/integrator-board";
+import { CreateRockForm } from "@/components/rocks/create-rock-form";
+import { isAdmin } from "@/lib/access";
 
 export default async function IntegratorPage({
   searchParams,
@@ -12,25 +15,35 @@ export default async function IntegratorPage({
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return notFound();
 
-  // Only show to integrators (users who are integrator on at least one rock)
-  const integratorCheck = await prisma.rock.findFirst({
-    where: { integratorId: session.user.id },
-  });
-  if (!integratorCheck) return notFound();
+  // Allow access for admin roles OR users who are integrator on at least one rock
+  const isAdminUser = isAdmin(session.user.role);
+  if (!isAdminUser) {
+    const integratorCheck = await prisma.rock.findFirst({
+      where: { integratorId: session.user.id },
+    });
+    if (!integratorCheck) return notFound();
+  }
 
-  const selectedQ = searchParams.q ? parseInt(searchParams.q, 10) : 2;
-  const selectedYear = searchParams.year ? parseInt(searchParams.year, 10) : 2026;
+  const { quarter: defaultQ, year: defaultYear } = getCurrentQuarter();
+  const selectedQ = searchParams.q ? parseInt(searchParams.q, 10) : defaultQ;
+  const selectedYear = searchParams.year ? parseInt(searchParams.year, 10) : defaultYear;
 
-  // Get all OPEN rocks where this user is integrator, grouped by business
+  // Admin emails see ALL rocks; other integrators see only their own
+  const integratorFilter = isAdminUser
+    ? { integratorId: { not: null } }
+    : { integratorId: session.user.id };
+
+  // Get all OPEN rocks, grouped by business
   const rocks = await prisma.rock.findMany({
     where: {
-      integratorId: session.user.id,
+      ...integratorFilter,
       quarter: selectedQ,
       year: selectedYear,
       done: false,
     },
     include: {
       owner: { select: { id: true, name: true } },
+      owners: { select: { id: true, name: true } },
       business: { select: { id: true, name: true, slug: true } },
       todos: { select: { id: true, done: true } },
     },
@@ -38,50 +51,76 @@ export default async function IntegratorPage({
   });
 
   // Group rocks by business
-  const byBusiness: Record<
-    string,
-    {
-      businessName: string;
-      businessSlug: string;
-      rocks: {
-        id: string;
-        title: string;
-        ownerName: string;
-        status: string;
-        done: boolean;
-        todoDone: number;
-        todoTotal: number;
-        slug: string;
-      }[];
-    }
-  > = {};
+  type CardType = {
+    id: string;
+    title: string;
+    ownerName: string;
+    businessName: string;
+    status: string;
+    done: boolean;
+    todoDone: number;
+    todoTotal: number;
+    slug: string;
+  };
+  type ColumnType = { businessName: string; businessSlug: string; rocks: CardType[] };
+
+  const byBusiness: Record<string, ColumnType> = {};
+  const byOwner: Record<string, ColumnType> = {};
 
   for (const rock of rocks) {
-    const key = rock.business.slug;
-    if (!byBusiness[key]) {
-      byBusiness[key] = {
-        businessName: rock.business.name,
-        businessSlug: rock.business.slug,
-        rocks: [],
-      };
-    }
-    byBusiness[key].rocks.push({
+    const ownerNames = rock.owners.length > 0
+      ? rock.owners.map((o) => o.name).join(", ")
+      : rock.owner.name;
+    const card = {
       id: rock.id,
       title: rock.title,
-      ownerName: rock.owner.name,
+      ownerName: ownerNames,
+      businessName: rock.business.name,
       status: rock.status,
       done: rock.done,
       todoDone: rock.todos.filter((t) => t.done).length,
       todoTotal: rock.todos.length,
       slug: rock.business.slug,
-    });
+    };
+
+    const bKey = rock.business.slug;
+    if (!byBusiness[bKey]) {
+      byBusiness[bKey] = {
+        businessName: rock.business.name,
+        businessSlug: rock.business.slug,
+        rocks: [],
+      };
+    }
+    byBusiness[bKey].rocks.push(card);
+
+    // For "By Owner", put the rock under each assigned owner
+    const ownerList = rock.owners.length > 0 ? rock.owners : [rock.owner];
+    for (const o of ownerList) {
+      const oKey = o.id;
+      if (!byOwner[oKey]) {
+        byOwner[oKey] = {
+          businessName: o.name ?? "Unassigned",
+          businessSlug: oKey,
+          rocks: [],
+        };
+      }
+      byOwner[oKey].rocks.push(card);
+    }
+  }
+
+  // Sort owner columns alphabetically by name
+  const byOwnerSorted: typeof byOwner = {};
+  for (const k of Object.keys(byOwner).sort((a, b) =>
+    byOwner[a].businessName.localeCompare(byOwner[b].businessName)
+  )) {
+    byOwnerSorted[k] = byOwner[k];
   }
 
   // Totals across open + completed for accurate progress
   const allCounts = await prisma.rock.groupBy({
     by: ["done"],
     where: {
-      integratorId: session.user.id,
+      ...integratorFilter,
       quarter: selectedQ,
       year: selectedYear,
     },
@@ -94,9 +133,77 @@ export default async function IntegratorPage({
   // Get available quarters for the filter
   const quarters = await prisma.rock.groupBy({
     by: ["quarter", "year"],
-    where: { integratorId: session.user.id },
+    where: integratorFilter,
     orderBy: [{ year: "desc" }, { quarter: "desc" }],
   });
+
+  // Calendar data: all rocks with target dates + all milestones for this quarter
+  const [calendarRocksRaw, calendarMilestonesRaw] = await Promise.all([
+    prisma.rock.findMany({
+      where: {
+        ...integratorFilter,
+        quarter: selectedQ,
+        year: selectedYear,
+        targetCompletionDate: { not: null },
+        done: false,
+      },
+      include: {
+        owners: { select: { name: true } },
+        owner: { select: { name: true } },
+        business: { select: { slug: true, name: true } },
+      },
+    }),
+    prisma.rockMilestone.findMany({
+      where: {
+        done: false,
+        rock: {
+          ...integratorFilter,
+          quarter: selectedQ,
+          year: selectedYear,
+        },
+      },
+      include: {
+        rock: {
+          select: {
+            id: true,
+            title: true,
+            business: { select: { slug: true, name: true } },
+            owners: { select: { name: true } },
+            owner: { select: { name: true } },
+          },
+        },
+      },
+    }),
+  ]);
+
+  const calendarRocks = calendarRocksRaw.map((r) => ({
+    id: r.id,
+    title: r.title,
+    ownerName: r.owners.length > 0 ? r.owners.map((o) => o.name).join(", ") : r.owner.name,
+    businessName: r.business.name,
+    slug: r.business.slug,
+    targetDate: r.targetCompletionDate!.toISOString().split("T")[0],
+    status: r.status,
+    done: r.done,
+  }));
+
+  const calendarMilestones = calendarMilestonesRaw.map((m) => ({
+    id: m.id,
+    title: m.title,
+    rockTitle: m.rock.title,
+    rockId: m.rock.id,
+    slug: m.rock.business.slug,
+    businessName: m.rock.business.name,
+    ownerName: m.rock.owners.length > 0 ? m.rock.owners.map((o) => o.name).join(", ") : m.rock.owner.name,
+    endDate: m.endDate.toISOString().split("T")[0],
+    done: m.done,
+  }));
+
+  // For create rock form
+  const [allBusinesses, allUsers] = await Promise.all([
+    prisma.business.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, slug: true } }),
+    prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
+  ]);
 
   return (
     <div className="flex flex-col gap-4 h-full">
@@ -107,21 +214,32 @@ export default async function IntegratorPage({
             Open rocks across companies &middot; Q{selectedQ} {selectedYear}
           </p>
         </div>
-        <a
-          href="/integrator/completed"
-          className="inline-flex items-center gap-2 h-9 px-4 rounded-lg border bg-card text-sm font-medium btn-outline-gold"
-        >
-          View Completed Rocks
-        </a>
+        <div className="flex items-center gap-2">
+          <CreateRockForm
+            businesses={allBusinesses}
+            users={allUsers}
+            defaultQuarter={selectedQ}
+            defaultYear={selectedYear}
+          />
+          <a
+            href="/integrator/completed"
+            className="inline-flex items-center gap-2 h-9 px-4 rounded-lg border bg-card text-sm font-medium btn-outline-gold"
+          >
+            View Completed Rocks
+          </a>
+        </div>
       </div>
 
       <IntegratorBoard
+        byOwner={byOwnerSorted}
         byBusiness={byBusiness}
         quarters={quarters.map((q) => ({ quarter: q.quarter, year: q.year }))}
         selectedQ={selectedQ}
         selectedYear={selectedYear}
         totalRocks={totalRocksAll}
         doneRocks={doneRocksTotal}
+        calendarRocks={calendarRocks}
+        calendarMilestones={calendarMilestones}
       />
     </div>
   );

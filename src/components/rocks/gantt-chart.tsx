@@ -8,127 +8,199 @@ type Milestone = {
   done: boolean;
 };
 
+type GanttTodo = {
+  id: string;
+  title: string;
+  startDate: string;
+  endDate: string;
+  done: boolean;
+  killed: boolean;
+  milestoneId: string | null;
+};
+
+// Parse any date string to a UTC midnight timestamp (strips time component)
+function toUTCDay(dateStr: string): number {
+  const d = new Date(dateStr);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+function todayUTC(): number {
+  const now = new Date();
+  return Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+}
+
+const MS_PER_DAY = 86400000;
+
 export function GanttChart({
   milestones,
+  todos = [],
   targetCompletionDate,
 }: {
   milestones: Milestone[];
+  todos?: GanttTodo[];
   targetCompletionDate: string | null;
 }) {
-  if (milestones.length === 0) return null;
+  if (milestones.length === 0 && todos.length === 0) return null;
 
-  // Calculate date range across all milestones
-  const allDates = milestones.flatMap((m) => [
-    new Date(m.startDate).getTime(),
-    new Date(m.endDate).getTime(),
-  ]);
+  const todayMs = todayUTC();
+
+  // Collect all dates for range (as UTC day timestamps)
+  const allDates: number[] = [todayMs];
+  for (const m of milestones) {
+    allDates.push(toUTCDay(m.startDate), toUTCDay(m.endDate));
+  }
+  for (const t of todos) {
+    allDates.push(toUTCDay(t.startDate), toUTCDay(t.endDate));
+  }
   if (targetCompletionDate) {
-    allDates.push(new Date(targetCompletionDate).getTime());
-  }
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  allDates.push(today.getTime());
-
-  const minDate = new Date(Math.min(...allDates));
-  const maxDate = new Date(Math.max(...allDates));
-
-  // Add some padding
-  minDate.setDate(minDate.getDate() - 3);
-  maxDate.setDate(maxDate.getDate() + 3);
-
-  const totalDays = Math.max(1, Math.ceil((maxDate.getTime() - minDate.getTime()) / (1000 * 60 * 60 * 24)));
-
-  function dayOffset(dateStr: string) {
-    const d = new Date(dateStr);
-    return Math.ceil((d.getTime() - minDate.getTime()) / (1000 * 60 * 60 * 24));
+    allDates.push(toUTCDay(targetCompletionDate));
   }
 
-  function todayOffset() {
-    return Math.ceil((today.getTime() - minDate.getTime()) / (1000 * 60 * 60 * 24));
+  const rangeMin = Math.min(...allDates) - 3 * MS_PER_DAY;
+  const rangeMax = Math.max(...allDates) + 3 * MS_PER_DAY;
+  const totalDays = Math.max(1, Math.round((rangeMax - rangeMin) / MS_PER_DAY));
+
+  function dayOffset(dateStr: string): number {
+    return Math.round((toUTCDay(dateStr) - rangeMin) / MS_PER_DAY);
   }
 
-  // Generate month labels
-  const months: { label: string; offset: number }[] = [];
-  const cursor = new Date(minDate);
-  cursor.setDate(1);
-  if (cursor < minDate) cursor.setMonth(cursor.getMonth() + 1);
-  while (cursor <= maxDate) {
-    months.push({
-      label: cursor.toLocaleDateString("en-US", { month: "short", year: "2-digit" }),
-      offset: Math.ceil((cursor.getTime() - minDate.getTime()) / (1000 * 60 * 60 * 24)),
-    });
-    cursor.setMonth(cursor.getMonth() + 1);
+  function todayOffsetDays(): number {
+    return Math.round((todayMs - rangeMin) / MS_PER_DAY);
+  }
+
+  // Bi-monthly labels: 1st and 15th of each month
+  const ticks: { label: string; offset: number }[] = [];
+  const startD = new Date(rangeMin);
+  let curYear = startD.getUTCFullYear();
+  let curMonth = startD.getUTCMonth();
+  while (true) {
+    for (const day of [1, 15]) {
+      const ts = Date.UTC(curYear, curMonth, day);
+      if (ts > rangeMax) break;
+      if (ts >= rangeMin) {
+        const d = new Date(ts);
+        const monthStr = d.toLocaleDateString("en-US", { month: "short", timeZone: "UTC" });
+        ticks.push({
+          label: `${monthStr} ${day}`,
+          offset: Math.round((ts - rangeMin) / MS_PER_DAY),
+        });
+      }
+    }
+    const lastTick = Date.UTC(curYear, curMonth, 15);
+    if (lastTick > rangeMax) break;
+    curMonth++;
+    if (curMonth > 11) { curMonth = 0; curYear++; }
   }
 
   const sorted = [...milestones].sort(
     (a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime()
   );
 
+  // Group todos by milestone
+  const todosByMilestone: Record<string, GanttTodo[]> = {};
+  const unlinkedTodos: GanttTodo[] = [];
+  for (const t of todos) {
+    if (t.milestoneId) {
+      (todosByMilestone[t.milestoneId] ??= []).push(t);
+    } else {
+      unlinkedTodos.push(t);
+    }
+  }
+
+  const labelWidth = 180;
+  const pxPerDay = 4;
+  const chartMinWidth = `${totalDays * pxPerDay}px`;
+
+  function barColor(done: boolean, endDate: string, isTodo?: boolean, killed?: boolean) {
+    const opacity = isTodo ? "/70" : "";
+    if (killed) return `bg-red-400${opacity}`;
+    if (done) return `bg-green-500${opacity}`;
+    if (isTodo && toUTCDay(endDate) < todayMs) return `bg-amber-400${opacity}`;
+    if (toUTCDay(endDate) < todayMs) return `bg-red-400${opacity}`;
+    return `bg-blue-500${opacity}`;
+  }
+
+  function renderBar(item: { id: string; title: string; startDate: string; endDate: string; done: boolean; killed?: boolean }, isTodo: boolean) {
+    const isKilled = !!item.killed;
+    const start = dayOffset(item.startDate);
+    const end = dayOffset(item.endDate);
+    const width = Math.max(1, end - start);
+    const pctLeft = (start / totalDays) * 100;
+    const pctWidth = (width / totalDays) * 100;
+    const barHeight = isTodo ? "h-5" : "h-7";
+    const labelPad = isTodo ? "pl-4" : "";
+    const barInner = isTodo ? "top-1.5 bottom-1.5" : "top-1 bottom-1";
+
+    return (
+      <div key={item.id} className={`flex items-center ${barHeight} gap-2`}>
+        <div
+          className={`shrink-0 truncate text-xs pr-2 text-right cursor-default ${labelPad} ${
+            isKilled ? "line-through text-red-400/70" : isTodo ? "text-muted-foreground" : "font-medium"
+          }`}
+          style={{ width: `${labelWidth}px` }}
+          title={item.title}
+        >
+          {isTodo && <span className="text-muted-foreground/50 mr-1">└</span>}
+          {item.title}
+        </div>
+        <div
+          className={`relative flex-1 ${barHeight} ${isTodo ? "bg-muted/20" : "bg-muted/30"} rounded`}
+          style={{ minWidth: chartMinWidth }}
+        >
+          {/* Today marker */}
+          <div
+            className="absolute top-0 bottom-0 w-px bg-orange-400 z-10"
+            style={{ left: `${(todayOffsetDays() / totalDays) * 100}%` }}
+          />
+          {/* Target marker */}
+          {targetCompletionDate && !isTodo && (
+            <div
+              className="absolute top-0 bottom-0 w-px bg-red-400 z-10 border-dashed"
+              style={{ left: `${(dayOffset(targetCompletionDate) / totalDays) * 100}%` }}
+            />
+          )}
+          {/* Bar */}
+          <div
+            className={`absolute ${barInner} rounded-sm ${barColor(item.done, item.endDate, isTodo, isKilled)}`}
+            style={{ left: `${pctLeft}%`, width: `${pctWidth}%` }}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-col gap-1 overflow-x-auto">
-      {/* Month labels */}
-      <div className="relative h-6 ml-[180px]" style={{ minWidth: `${totalDays * 4}px` }}>
-        {months.map((m, i) => (
+    <div className="flex flex-col gap-0.5 overflow-x-auto">
+      {/* Timeline labels (1st & 15th) */}
+      <div className="relative h-6" style={{ marginLeft: labelWidth, minWidth: chartMinWidth }}>
+        {ticks.map((t, i) => (
           <span
             key={i}
             className="absolute text-[10px] text-muted-foreground font-medium"
-            style={{ left: `${(m.offset / totalDays) * 100}%` }}
+            style={{ left: `${(t.offset / totalDays) * 100}%` }}
           >
-            {m.label}
+            {t.label}
           </span>
         ))}
       </div>
 
-      {/* Rows */}
-      {sorted.map((m) => {
-        const start = dayOffset(m.startDate);
-        const end = dayOffset(m.endDate);
-        const width = Math.max(1, end - start);
-        const pctLeft = (start / totalDays) * 100;
-        const pctWidth = (width / totalDays) * 100;
+      {/* Milestone rows with nested todo sub-bars */}
+      {sorted.map((m) => (
+        <div key={m.id} className="flex flex-col">
+          {renderBar(m, false)}
+          {(todosByMilestone[m.id] || []).map((t) => renderBar(t, true))}
+        </div>
+      ))}
 
-        return (
-          <div key={m.id} className="flex items-center h-8 gap-2">
-            <div className="w-[180px] shrink-0 truncate text-xs font-medium pr-2 text-right">
-              {m.title}
-            </div>
-            <div
-              className="relative flex-1 h-6 bg-muted/30 rounded"
-              style={{ minWidth: `${totalDays * 4}px` }}
-            >
-              {/* Today marker */}
-              <div
-                className="absolute top-0 bottom-0 w-px bg-orange-400 z-10"
-                style={{ left: `${(todayOffset() / totalDays) * 100}%` }}
-              />
-              {/* Target completion marker */}
-              {targetCompletionDate && (
-                <div
-                  className="absolute top-0 bottom-0 w-px bg-red-400 z-10 border-dashed"
-                  style={{ left: `${(dayOffset(targetCompletionDate) / totalDays) * 100}%` }}
-                />
-              )}
-              {/* Bar */}
-              <div
-                className={`absolute top-1 bottom-1 rounded-sm ${
-                  m.done
-                    ? "bg-green-500"
-                    : new Date(m.endDate) < today
-                    ? "bg-red-400"
-                    : "bg-blue-500"
-                }`}
-                style={{
-                  left: `${pctLeft}%`,
-                  width: `${pctWidth}%`,
-                }}
-              />
-            </div>
-          </div>
-        );
-      })}
+      {/* Unlinked todos with dates */}
+      {unlinkedTodos.length > 0 && (
+        <div className="flex flex-col mt-1 pt-1 border-t border-dashed border-muted">
+          {unlinkedTodos.map((t) => renderBar(t, true))}
+        </div>
+      )}
 
       {/* Legend */}
-      <div className="flex gap-4 mt-2 ml-[180px] text-[10px] text-muted-foreground">
+      <div className="flex flex-wrap gap-3 mt-3 text-[10px] text-muted-foreground" style={{ marginLeft: labelWidth }}>
         <span className="flex items-center gap-1">
           <span className="w-3 h-2 bg-blue-500 rounded-sm inline-block" /> In Progress
         </span>
@@ -136,14 +208,29 @@ export function GanttChart({
           <span className="w-3 h-2 bg-green-500 rounded-sm inline-block" /> Complete
         </span>
         <span className="flex items-center gap-1">
+          <span className="w-3 h-2 bg-amber-400 rounded-sm inline-block" /> Overdue To-Do
+        </span>
+        <span className="flex items-center gap-1">
           <span className="w-3 h-2 bg-red-400 rounded-sm inline-block" /> Overdue
         </span>
+        {todos.length > 0 && (
+          <>
+            <span className="flex items-center gap-1">
+              <span className="w-3 h-1.5 bg-blue-500/70 rounded-sm inline-block" /> To-Do
+            </span>
+            {todos.some((t) => t.killed) && (
+              <span className="flex items-center gap-1">
+                <span className="w-3 h-1.5 bg-red-400/70 rounded-sm inline-block" /> Killed
+              </span>
+            )}
+          </>
+        )}
         <span className="flex items-center gap-1">
           <span className="w-px h-3 bg-orange-400 inline-block" /> Today
         </span>
         {targetCompletionDate && (
           <span className="flex items-center gap-1">
-            <span className="w-px h-3 bg-red-400 inline-block border-dashed" /> Target Date
+            <span className="w-px h-3 bg-red-400 inline-block" /> Target
           </span>
         )}
       </div>

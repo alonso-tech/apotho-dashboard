@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
+import { NotificationBell } from "@/components/notification-bell";
 
 export default async function DashboardLayout({
   children,
@@ -21,9 +22,10 @@ export default async function DashboardLayout({
       <SidebarInset className="overflow-hidden">
         <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
           <SidebarTrigger className="-ml-1" />
-          <span className="text-sm font-medium text-muted-foreground">
+          <span className="text-sm font-medium text-muted-foreground flex-1">
             Apotho Dashboard
           </span>
+          <NotificationBell />
         </header>
         <div className="flex flex-1 flex-col gap-4 p-4 min-h-0">{children}</div>
       </SidebarInset>

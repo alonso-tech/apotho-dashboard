@@ -1,0 +1,24 @@
+name: Sync Scorecard Data
+
+on:
+  schedule:
+    # Every day at 6 AM UTC (midnight MDT)
+    - cron: '0 6 * * *'
+  workflow_dispatch: # Allow manual trigger from GitHub UI
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: node scripts/sync-scorecard.js
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          EVOLUTION_NOTION_API_KEY: ${{ secrets.EVOLUTION_NOTION_API_KEY }}
+          SENTRI_NOTION_API_KEY: ${{ secrets.SENTRI_NOTION_API_KEY }}
+          EVOLUTION_STRIPE_API_KEY: ${{ secrets.EVOLUTION_STRIPE_API_KEY }}

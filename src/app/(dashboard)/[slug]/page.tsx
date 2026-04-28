@@ -1,60 +1,65 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { getCurrentQuarter } from "@/lib/quarter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TargetIcon, CheckSquareIcon, CalendarIcon, BarChart2Icon, DollarSignIcon } from "lucide-react";
+import { BusinessAccessManager } from "@/components/business-access-manager";
+import { isAdmin as checkAdmin } from "@/lib/access";
 
 interface PageProps {
   params: { slug: string };
 }
 
 export default async function BusinessPage({ params }: PageProps) {
+  const session = await getServerSession(authOptions);
+  const { quarter: currentQ, year: currentYear } = getCurrentQuarter();
+
   const business = await prisma.business.findUnique({
     where: { slug: params.slug },
     include: {
       owners: { include: { user: true } },
-      rocks: { where: { done: false }, take: 5, orderBy: { createdAt: "desc" } },
-      todos: { where: { done: false }, take: 5, orderBy: { createdAt: "desc" } },
-      meetings: { take: 3, orderBy: { date: "desc" } },
     },
   });
 
   if (!business) notFound();
 
+  const isAdminUser = checkAdmin(session?.user?.role);
+  const allUsers = isAdminUser
+    ? await prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } })
+    : [];
+
   const sections = [
     {
-      label: "Rocks",
+      label: "Open Rocks",
       href: `/${business.slug}/rocks`,
       icon: TargetIcon,
-      count: business.rocks.length,
-      description: "Q1 2026 priorities",
+      description: `Q${currentQ} ${currentYear} priorities`,
     },
     {
       label: "To-Dos",
       href: `/${business.slug}/todos`,
       icon: CheckSquareIcon,
-      count: business.todos.length,
       description: "Open action items",
     },
     {
       label: "Meetings",
       href: `/${business.slug}/meetings`,
       icon: CalendarIcon,
-      count: business.meetings.length,
       description: "Level 10 meeting history",
     },
     {
       label: "Scorecard",
       href: `/${business.slug}/scorecard`,
       icon: BarChart2Icon,
-      count: null,
       description: "Weekly KPIs & measurables",
     },
     {
       label: "Financials",
       href: `/${business.slug}/financials`,
       icon: DollarSignIcon,
-      count: null,
       description: "Revenue & expense overview",
     },
   ];
@@ -73,10 +78,22 @@ export default async function BusinessPage({ params }: PageProps) {
               key={o.id}
               className="inline-flex items-center rounded-full bg-secondary px-2.5 py-0.5 text-xs font-medium"
             >
-              {o.user.name}
+              {o.user.name} <span className="text-muted-foreground ml-1">({o.role})</span>
             </span>
           ))}
         </div>
+        {isAdminUser && (
+          <BusinessAccessManager
+            businessId={business.id}
+            currentOwners={business.owners.map((o) => ({
+              id: o.id,
+              userId: o.userId,
+              userName: o.user.name,
+              role: o.role,
+            }))}
+            allUsers={allUsers}
+          />
+        )}
       </div>
 
       {/* Quick nav cards */}
@@ -88,12 +105,7 @@ export default async function BusinessPage({ params }: PageProps) {
                 <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
                   <s.icon className="h-5 w-5 text-primary" />
                 </div>
-                <div>
-                  <CardTitle className="text-base">{s.label}</CardTitle>
-                  {s.count !== null && (
-                    <span className="text-xs text-muted-foreground">{s.count} open</span>
-                  )}
-                </div>
+                <CardTitle className="text-base">{s.label}</CardTitle>
               </CardHeader>
               <CardContent>
                 <p className="text-sm text-muted-foreground">{s.description}</p>
@@ -103,50 +115,6 @@ export default async function BusinessPage({ params }: PageProps) {
         ))}
       </div>
 
-      {/* Open Rocks preview */}
-      {business.rocks.length > 0 && (
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold">Open Rocks (Q1 2026)</h2>
-            <Link href={`/${business.slug}/rocks`} className="text-sm text-primary hover:underline">
-              View all
-            </Link>
-          </div>
-          <div className="flex flex-col gap-2">
-            {business.rocks.map((rock) => (
-              <div key={rock.id} className="flex items-center gap-3 rounded-lg border p-3">
-                <div className="h-2 w-2 rounded-full bg-orange-400 shrink-0" />
-                <span className="text-sm">{rock.title}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Open Todos preview */}
-      {business.todos.length > 0 && (
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold">Open To-Dos</h2>
-            <Link href={`/${business.slug}/todos`} className="text-sm text-primary hover:underline">
-              View all
-            </Link>
-          </div>
-          <div className="flex flex-col gap-2">
-            {business.todos.map((todo) => (
-              <div key={todo.id} className="flex items-center gap-3 rounded-lg border p-3">
-                <div className="h-2 w-2 rounded-full bg-blue-400 shrink-0" />
-                <span className="text-sm">{todo.title}</span>
-                {todo.dueDate && (
-                  <span className="ml-auto text-xs text-muted-foreground">
-                    Due {new Date(todo.dueDate).toLocaleDateString()}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

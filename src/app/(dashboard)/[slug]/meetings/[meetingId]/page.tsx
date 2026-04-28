@@ -3,6 +3,7 @@ import Link from "next/link";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { getCurrentQuarter } from "@/lib/quarter";
 import { ChevronLeftIcon } from "lucide-react";
 import { MeetingRunner } from "@/components/meetings/meeting-runner";
 
@@ -32,7 +33,7 @@ export default async function MeetingPage({ params }: PageProps) {
   if (!meeting || meeting.businessId !== business.id) notFound();
 
   const rocks = await prisma.rock.findMany({
-    where: { businessId: business.id, quarter: 1, year: 2026 },
+    where: { businessId: business.id, quarter: getCurrentQuarter().quarter, year: getCurrentQuarter().year },
     include: { owner: true },
     orderBy: { createdAt: "asc" },
   });

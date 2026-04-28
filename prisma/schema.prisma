@@ -11,6 +11,7 @@ model User {
   name           String
   email          String    @unique
   hashedPassword String
+  role           String    @default("member") // integrator, visionary, member
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -22,12 +23,15 @@ model User {
 
   // App relations
   ownedBusinesses BusinessOwner[]
-  rocks           Rock[]
-  integratedRocks Rock[]          @relation("integrator")
+  rocks           Rock[]           @relation("primaryOwner")
+  ownedRocks      Rock[]           @relation("RockOwners")
+  integratedRocks Rock[]           @relation("integrator")
   todos           Todo[]
   meetingSegues   MeetingSegue[]
   segueRatings    MeetingRating[]
   rockNotes       RockNote[]
+  notifications   Notification[]
+  milestones      RockMilestone[]
 }
 
 model Business {
@@ -76,7 +80,8 @@ model Rock {
   updatedAt            DateTime  @updatedAt
 
   business   Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  owner      User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  owner      User           @relation("primaryOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  owners     User[]         @relation("RockOwners")
   integrator User?          @relation("integrator", fields: [integratorId], references: [id])
   todos      Todo[]
   notes      RockNote[]
@@ -84,14 +89,27 @@ model Rock {
 }
 
 model RockNote {
+  id          String           @id @default(cuid())
+  rockId      String
+  authorId    String
+  content     String
+  createdAt   DateTime         @default(now())
+
+  rock        Rock             @relation(fields: [rockId], references: [id], onDelete: Cascade)
+  author      User             @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  attachments RockAttachment[]
+}
+
+model RockAttachment {
   id        String   @id @default(cuid())
-  rockId    String
-  authorId  String
-  content   String
+  noteId    String
+  fileName  String
+  fileUrl   String
+  fileSize  Int
+  fileType  String
   createdAt DateTime @default(now())
 
-  rock   Rock @relation(fields: [rockId], references: [id], onDelete: Cascade)
-  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  note RockNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
 }
 
 model RockMilestone {
@@ -101,29 +119,51 @@ model RockMilestone {
   startDate DateTime
   endDate   DateTime
   done      Boolean   @default(false)
+  ownerId   String?
   createdAt DateTime  @default(now())
 
-  rock Rock @relation(fields: [rockId], references: [id], onDelete: Cascade)
+  rock  Rock   @relation(fields: [rockId], references: [id], onDelete: Cascade)
+  owner User?  @relation(fields: [ownerId], references: [id])
+  todos Todo[]
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String   // rock-assigned, todo-assigned, note-mention
+  title     String
+  body      String
+  href      String?  // link to the relevant page
+  read      Boolean  @default(false)
+  emailSent Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 // ─── Todos ────────────────────────────────────────────────────────────────────
 
 model Todo {
-  id         String    @id @default(cuid())
-  title      String
-  done       Boolean   @default(false)
-  dueDate    DateTime?
-  businessId String
-  ownerId    String
-  meetingId  String?
-  rockId     String?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  id          String    @id @default(cuid())
+  title       String
+  done        Boolean   @default(false)
+  killed      Boolean   @default(false)
+  dueDate     DateTime?
+  startDate   DateTime?
+  endDate     DateTime?
+  businessId  String
+  ownerId     String
+  meetingId   String?
+  rockId      String?
+  milestoneId String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  business   Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  owner      User      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  meeting    Meeting?  @relation(fields: [meetingId], references: [id])
-  rock       Rock?     @relation(fields: [rockId], references: [id])
+  business    Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  owner       User            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  meeting     Meeting?        @relation(fields: [meetingId], references: [id])
+  rock        Rock?           @relation(fields: [rockId], references: [id])
+  milestone   RockMilestone?  @relation(fields: [milestoneId], references: [id])
 }
 
 // ─── Meetings ─────────────────────────────────────────────────────────────────
@@ -180,11 +220,13 @@ model MeetingRating {
 // ─── Scorecard / Measurables ──────────────────────────────────────────────────
 
 model Measurable {
-  id         String   @id @default(cuid())
-  businessId String
-  name       String
-  goal       String
-  unit       String?
+  id            String   @id @default(cuid())
+  businessId    String
+  name          String
+  goal          String
+  unit          String?
+  goalDirection String   @default("gte") // gte, lte, gt, lt, eq
+  sortOrder     Int      @default(0)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 

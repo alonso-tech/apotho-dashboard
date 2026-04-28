@@ -262,7 +262,7 @@ function RocksSection({ rocks, readOnly }: { rocks: RockData[]; readOnly: boolea
 
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-sm text-muted-foreground mb-2">Review Q1 2026 rocks — mark Done or Not Done.</p>
+      <p className="text-sm text-muted-foreground mb-2">Review rocks — mark Done or Not Done.</p>
       {rocks.length === 0 && (
         <p className="text-sm text-muted-foreground">No rocks for this quarter.</p>
       )}

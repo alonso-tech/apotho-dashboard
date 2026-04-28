@@ -1,16 +1,27 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { getCurrentQuarter } from "@/lib/quarter";
+import { getVisibleBusinesses } from "@/lib/access";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import Link from "next/link";
 import { TargetIcon, CheckSquareIcon, BuildingIcon } from "lucide-react";
 
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions);
+  const { quarter: currentQ, year: currentYear } = getCurrentQuarter();
+
+  // Get businesses the user can see
+  const visibleBusinesses = session?.user?.id
+    ? await getVisibleBusinesses(session.user.id, session.user.role)
+    : [];
+  const visibleIds = visibleBusinesses.map((b) => b.id);
+
   const businesses = await prisma.business.findMany({
+    where: { id: { in: visibleIds } },
     orderBy: { name: "asc" },
     include: {
-      rocks: { where: { year: 2026, quarter: 1 } },
+      rocks: { where: { year: currentYear, quarter: currentQ } },
       todos: { where: { done: false } },
       owners: { include: { user: true } },
     },
@@ -19,7 +30,7 @@ export default async function DashboardPage() {
   // My rocks / todos for summary
   const userId = session?.user?.id;
   const myRocks = userId
-    ? await prisma.rock.count({ where: { ownerId: userId, year: 2026, quarter: 1, done: false } })
+    ? await prisma.rock.count({ where: { ownerId: userId, year: currentYear, quarter: currentQ, done: false } })
     : 0;
   const myTodos = userId
     ? await prisma.todo.count({ where: { ownerId: userId, done: false } })
@@ -47,7 +58,7 @@ export default async function DashboardPage() {
             </CardHeader>
             <CardContent>
               <p className="text-3xl font-bold">{myRocks}</p>
-              <p className="text-xs text-muted-foreground mt-1">Q1 2026</p>
+              <p className="text-xs text-muted-foreground mt-1">Q{currentQ} {currentYear}</p>
             </CardContent>
           </Card>
         </Link>
@@ -88,7 +99,7 @@ export default async function DashboardPage() {
                   <CardContent>
                     <div className="flex flex-col gap-1">
                       <div className="flex items-center justify-between text-xs">
-                        <span className="text-muted-foreground">Q1 Rocks</span>
+                        <span className="text-muted-foreground">Q{currentQ} Rocks</span>
                         <span className="font-medium">
                           {doneRocks}/{totalRocks}
                         </span>

@@ -3,6 +3,10 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import Link from "next/link";
 import { RockLinkItem } from "@/components/rocks/rock-link-item";
+import { CreateRockForm } from "@/components/rocks/create-rock-form";
+import { getCurrentQuarter } from "@/lib/quarter";
+
+const DONALD_ID = "cmnghjpm70001g0vpykrfkag5";
 
 interface SearchParams {
   q?: string;
@@ -17,17 +21,37 @@ export default async function MyRocksPage({
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return null;
 
-  const currentYear = new Date().getFullYear();
-  const selectedQ = parseInt(searchParams.q ?? "1", 10) || 1;
-  const selectedYear = parseInt(searchParams.year ?? String(currentYear), 10) || currentYear;
+  const { quarter: defaultQ, year: defaultYear } = getCurrentQuarter();
+  const selectedQ = parseInt(searchParams.q ?? String(defaultQ), 10) || defaultQ;
+  const selectedYear = parseInt(searchParams.year ?? String(defaultYear), 10) || defaultYear;
 
-  const rocks = await prisma.rock.findMany({
-    where: { ownerId: session.user.id, quarter: selectedQ, year: selectedYear },
-    include: { business: true, todos: { select: { id: true, done: true } } },
-    orderBy: [{ done: "asc" }, { createdAt: "asc" }],
-  });
+  const [openRocks, completedCount] = await Promise.all([
+    prisma.rock.findMany({
+      where: {
+        owners: { some: { id: session.user.id } },
+        quarter: selectedQ,
+        year: selectedYear,
+        done: false,
+      },
+      include: { business: true, todos: { select: { id: true, done: true } } },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.rock.count({
+      where: {
+        owners: { some: { id: session.user.id } },
+        quarter: selectedQ,
+        year: selectedYear,
+        done: true,
+      },
+    }),
+  ]);
 
-  const doneCount = rocks.filter((r) => r.done).length;
+  const rocks = openRocks;
+
+  const [allBusinesses, allUsers] = await Promise.all([
+    prisma.business.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, slug: true } }),
+    prisma.user.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true } }),
+  ]);
 
   // Group by business
   const byBusiness = rocks.reduce<Record<string, typeof rocks>>((acc, rock) => {
@@ -39,11 +63,21 @@ export default async function MyRocksPage({
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight gradient-text">My Rocks</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Q{selectedQ} {selectedYear} &mdash; {doneCount}/{rocks.length} complete
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight gradient-text">My Rocks</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Q{selectedQ} {selectedYear} &mdash; {rocks.length} open
+          </p>
+        </div>
+        <CreateRockForm
+          businesses={allBusinesses}
+          users={allUsers}
+          defaultQuarter={selectedQ}
+          defaultYear={selectedYear}
+          integratorId={DONALD_ID}
+          currentUserId={session.user.id}
+        />
       </div>
 
       {/* Quarter filter */}
@@ -87,6 +121,15 @@ export default async function MyRocksPage({
           </div>
         </div>
       ))}
+
+      {completedCount > 0 && (
+        <Link
+          href={`/my-rocks/completed?q=${selectedQ}&year=${selectedYear}`}
+          className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground border rounded-lg px-4 py-2.5 hover:bg-muted/50 transition-colors"
+        >
+          View {completedCount} completed rock{completedCount !== 1 ? "s" : ""}
+        </Link>
+      )}
     </div>
   );
 }

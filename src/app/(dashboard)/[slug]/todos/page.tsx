@@ -3,7 +3,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { TodoToggle } from "@/components/todos/todo-toggle";
 import { AddTodoForm } from "@/components/todos/add-todo-form";
-import { ChevronLeftIcon } from "lucide-react";
+import { ChevronLeftIcon, TargetIcon, MilestoneIcon } from "lucide-react";
 
 interface PageProps {
   params: { slug: string };
@@ -25,11 +25,43 @@ export default async function BusinessTodosPage({ params, searchParams }: PagePr
       businessId: business.id,
       ...(filter === "open" ? { done: false } : filter === "done" ? { done: true } : {}),
     },
-    include: { owner: true },
+    include: {
+      owner: true,
+      rock: { select: { id: true, title: true } },
+      milestone: { select: { id: true, title: true } },
+    },
     orderBy: [{ done: "asc" }, { createdAt: "desc" }],
   });
 
   const owners = business.owners.map((o) => ({ id: o.user.id, name: o.user.name }));
+
+  // Group by rock
+  type TodoType = (typeof todos)[number];
+  const rockGroups: { rockId: string | null; rockTitle: string | null; todos: TodoType[] }[] = [];
+  const byRock: Record<string, TodoType[]> = {};
+  const noRock: TodoType[] = [];
+
+  for (const todo of todos) {
+    if (todo.rock) {
+      const key = todo.rock.id;
+      if (!byRock[key]) byRock[key] = [];
+      byRock[key].push(todo);
+    } else {
+      noRock.push(todo);
+    }
+  }
+
+  for (const [rockId, rockTodos] of Object.entries(byRock)) {
+    rockGroups.push({
+      rockId,
+      rockTitle: rockTodos[0].rock?.title ?? null,
+      todos: rockTodos,
+    });
+  }
+
+  if (noRock.length > 0) {
+    rockGroups.push({ rockId: null, rockTitle: null, todos: noRock });
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -64,30 +96,72 @@ export default async function BusinessTodosPage({ params, searchParams }: PagePr
         ))}
       </div>
 
-      {/* Todo list */}
-      <div className="flex flex-col gap-2">
+      {/* Todo list grouped by rock */}
+      <div className="flex flex-col gap-4">
         {todos.length === 0 && (
           <p className="text-sm text-muted-foreground py-4">No to-dos found.</p>
         )}
-        {todos.map((todo) => (
-          <div
-            key={todo.id}
-            className={`flex items-start gap-3 rounded-lg border p-3 transition-colors ${
-              todo.done ? "bg-muted/50 opacity-70" : "bg-card"
-            }`}
-          >
-            <TodoToggle todoId={todo.id} done={todo.done} />
-            <div className="flex-1 min-w-0">
-              <p className={`text-sm font-medium ${todo.done ? "line-through text-muted-foreground" : ""}`}>
-                {todo.title}
-              </p>
-              <p className="text-xs text-muted-foreground mt-0.5">{todo.owner.name}</p>
-            </div>
-            {todo.dueDate && (
-              <span className="shrink-0 text-xs text-muted-foreground">
-                {new Date(todo.dueDate).toLocaleDateString()}
+        {rockGroups.map((group) => (
+          <div key={group.rockId ?? "no-rock"} className="flex flex-col gap-1.5">
+            {group.rockId ? (
+              <Link
+                href={`/${params.slug}/rocks/${group.rockId}`}
+                className="flex items-center gap-1.5 text-xs font-medium text-primary hover:underline mb-0.5"
+              >
+                <TargetIcon className="h-3 w-3" />
+                {group.rockTitle}
+              </Link>
+            ) : (
+              <span className="text-xs font-medium text-muted-foreground mb-0.5">
+                Unlinked To-Dos
               </span>
             )}
+            {group.todos.map((todo) => {
+              const todoContent = (
+                <>
+                  <TodoToggle todoId={todo.id} done={todo.done} />
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-sm font-medium ${todo.done ? "line-through text-muted-foreground" : ""}`}>
+                      {todo.title}
+                    </p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <p className="text-xs text-muted-foreground">{todo.owner.name}</p>
+                      {todo.milestone && (
+                        <p className="text-[11px] text-muted-foreground/70 flex items-center gap-1">
+                          <MilestoneIcon className="h-2.5 w-2.5" />
+                          {todo.milestone.title}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  {todo.dueDate && (
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {new Date(todo.dueDate).toLocaleDateString()}
+                    </span>
+                  )}
+                </>
+              );
+              return todo.rock ? (
+                <Link
+                  key={todo.id}
+                  href={`/${params.slug}/rocks/${todo.rock.id}#todo-${todo.id}`}
+                  className={`flex items-start gap-3 rounded-lg border p-3 ml-4 transition-colors hover:border-primary/30 hover:bg-muted/30 ${
+                    todo.done ? "bg-muted/50 opacity-70" : "bg-card"
+                  }`}
+                >
+                  {todoContent}
+                </Link>
+              ) : (
+                <div
+                  key={todo.id}
+                  className={`flex items-start gap-3 rounded-lg border p-3 transition-colors ${
+                    todo.done ? "bg-muted/50 opacity-70" : "bg-card"
+                  }`}
+                >
+                  {todoContent}
+                </div>
+              );
+            })}
           </div>
         ))}
       </div>

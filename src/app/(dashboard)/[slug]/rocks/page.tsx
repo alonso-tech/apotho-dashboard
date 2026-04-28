@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { AddRockForm } from "@/components/rocks/add-rock-form";
 import { RockLinkItem } from "@/components/rocks/rock-link-item";
 import { ChevronLeftIcon } from "lucide-react";
+import { getCurrentQuarter } from "@/lib/quarter";
 
 interface PageProps {
   params: { slug: string };
@@ -20,18 +21,23 @@ export default async function BusinessRocksPage({ params, searchParams }: PagePr
 
   if (!business) notFound();
 
-  const currentYear = new Date().getFullYear();
-  const selectedQ = parseInt(searchParams.q ?? "1", 10) || 1;
-  const selectedYear = parseInt(searchParams.year ?? String(currentYear), 10) || currentYear;
+  const { quarter: defaultQ, year: defaultYear } = getCurrentQuarter();
+  const selectedQ = parseInt(searchParams.q ?? String(defaultQ), 10) || defaultQ;
+  const selectedYear = parseInt(searchParams.year ?? String(defaultYear), 10) || defaultYear;
 
-  const rocks = await prisma.rock.findMany({
-    where: { businessId: business.id, quarter: selectedQ, year: selectedYear },
-    include: { owner: true, todos: { select: { id: true, done: true } } },
-    orderBy: { createdAt: "asc" },
-  });
+  const [openRocks, completedCount] = await Promise.all([
+    prisma.rock.findMany({
+      where: { businessId: business.id, quarter: selectedQ, year: selectedYear, done: false },
+      include: { owner: true, owners: { select: { name: true } }, todos: { select: { id: true, done: true } } },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.rock.count({
+      where: { businessId: business.id, quarter: selectedQ, year: selectedYear, done: true },
+    }),
+  ]);
 
+  const rocks = openRocks;
   const owners = business.owners.map((o) => ({ id: o.user.id, name: o.user.name }));
-  const doneCount = rocks.filter((r) => r.done).length;
 
   return (
     <div className="flex flex-col gap-6">
@@ -45,7 +51,7 @@ export default async function BusinessRocksPage({ params, searchParams }: PagePr
         </Link>
         <h1 className="text-3xl font-bold tracking-tight gradient-text">Rocks</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Q{selectedQ} {selectedYear} &mdash; {doneCount}/{rocks.length} complete
+          Q{selectedQ} {selectedYear} &mdash; {rocks.length} open
         </p>
       </div>
 
@@ -78,13 +84,22 @@ export default async function BusinessRocksPage({ params, searchParams }: PagePr
             rockId={rock.id}
             href={`/${params.slug}/rocks/${rock.id}`}
             title={rock.title}
-            ownerName={rock.owner.name}
+            ownerName={rock.owners.length > 0 ? rock.owners.map((o) => o.name).join(", ") : rock.owner.name}
             done={rock.done}
             todoDone={rock.todos.filter((t) => t.done).length}
             todoTotal={rock.todos.length}
           />
         ))}
       </div>
+
+      {completedCount > 0 && (
+        <Link
+          href={`/${params.slug}/rocks/completed?q=${selectedQ}&year=${selectedYear}`}
+          className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground border rounded-lg px-4 py-2.5 hover:bg-muted/50 transition-colors"
+        >
+          View {completedCount} completed rock{completedCount !== 1 ? "s" : ""}
+        </Link>
+      )}
 
       <AddRockForm
         businessId={business.id}

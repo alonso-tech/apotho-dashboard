@@ -1,14 +1,17 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 import Link from "next/link";
 import { RockToggle } from "@/components/rocks/rock-toggle";
-import { ChevronRightIcon, BuildingIcon } from "lucide-react";
+import { IntegratorCalendar } from "@/components/rocks/integrator-calendar";
+import { ChevronRightIcon, BuildingIcon, UserIcon, CalendarIcon } from "lucide-react";
 
 type RockCard = {
   id: string;
   title: string;
   ownerName: string;
+  businessName: string;
   status: string;
   done: boolean;
   todoDone: number;
@@ -36,23 +39,54 @@ const STATUS_LABELS: Record<string, string> = {
   complete: "Complete",
 };
 
+type CalendarRock = {
+  id: string;
+  title: string;
+  ownerName: string;
+  businessName: string;
+  slug: string;
+  targetDate: string;
+  status: string;
+  done: boolean;
+};
+
+type CalendarMilestone = {
+  id: string;
+  title: string;
+  rockTitle: string;
+  rockId: string;
+  slug: string;
+  businessName: string;
+  ownerName: string;
+  endDate: string;
+  done: boolean;
+};
+
 export function IntegratorBoard({
   byBusiness,
+  byOwner,
   quarters,
   selectedQ,
   selectedYear,
   totalRocks,
   doneRocks,
+  calendarRocks,
+  calendarMilestones,
 }: {
   byBusiness: Record<string, BusinessColumn>;
+  byOwner: Record<string, BusinessColumn>;
   quarters: { quarter: number; year: number }[];
   selectedQ: number;
   selectedYear: number;
   totalRocks: number;
   doneRocks: number;
+  calendarRocks: CalendarRock[];
+  calendarMilestones: CalendarMilestone[];
 }) {
   const router = useRouter();
-  const columns = Object.values(byBusiness);
+  const [groupBy, setGroupBy] = useState<"company" | "owner" | "calendar">("company");
+  const columns = Object.values(groupBy === "company" ? byBusiness : byOwner);
+  const HeaderIcon = groupBy === "company" ? BuildingIcon : groupBy === "owner" ? UserIcon : CalendarIcon;
 
   function handleQuarterChange(e: React.ChangeEvent<HTMLSelectElement>) {
     const [q, y] = e.target.value.split("-");
@@ -76,6 +110,33 @@ export function IntegratorBoard({
             </option>
           ))}
         </select>
+        <div className="inline-flex rounded-md border bg-card p-0.5">
+          <button
+            onClick={() => setGroupBy("company")}
+            className={`px-3 h-8 text-xs font-medium rounded ${
+              groupBy === "company" ? "gradient-primary text-white" : "text-muted-foreground"
+            }`}
+          >
+            By Company
+          </button>
+          <button
+            onClick={() => setGroupBy("owner")}
+            className={`px-3 h-8 text-xs font-medium rounded ${
+              groupBy === "owner" ? "gradient-primary text-white" : "text-muted-foreground"
+            }`}
+          >
+            By Owner
+          </button>
+          <button
+            onClick={() => setGroupBy("calendar")}
+            className={`px-3 h-8 text-xs font-medium rounded flex items-center gap-1 ${
+              groupBy === "calendar" ? "gradient-primary text-white" : "text-muted-foreground"
+            }`}
+          >
+            <CalendarIcon className="h-3.5 w-3.5" />
+            Calendar
+          </button>
+        </div>
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <span>
             {doneRocks}/{totalRocks} complete ({progress}%)
@@ -89,7 +150,13 @@ export function IntegratorBoard({
         </div>
       </div>
 
+      {/* Calendar view */}
+      {groupBy === "calendar" && (
+        <IntegratorCalendar rocks={calendarRocks} milestones={calendarMilestones} />
+      )}
+
       {/* Kanban board */}
+      {groupBy !== "calendar" && (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 pb-4 overflow-y-auto flex-1 min-h-0">
         {columns.length === 0 && (
           <p className="text-sm text-muted-foreground py-8">
@@ -106,7 +173,7 @@ export function IntegratorBoard({
             >
               {/* Column header */}
               <div className="flex items-center gap-2 px-3 py-2.5 border-b gradient-primary text-white rounded-t-lg">
-                <BuildingIcon className="h-4 w-4 shrink-0" />
+                <HeaderIcon className="h-4 w-4 shrink-0" />
                 <span className="font-semibold text-sm truncate">
                   {col.businessName}
                 </span>
@@ -132,7 +199,7 @@ export function IntegratorBoard({
                         <RockToggle rockId={rock.id} done={rock.done} />
                       </div>
                       <Link
-                        href={`/${rock.slug}/rocks/${rock.id}`}
+                        href={`/${rock.slug}/rocks/${rock.id}?from=integrator`}
                         className="flex-1 min-w-0"
                       >
                         <p
@@ -146,7 +213,7 @@ export function IntegratorBoard({
                         </p>
                         <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                           <span className="text-xs text-muted-foreground">
-                            {rock.ownerName}
+                            {groupBy === "owner" ? rock.businessName : rock.ownerName}
                           </span>
                           {rock.todoTotal > 0 && (
                             <span className="text-xs text-muted-foreground">
@@ -156,7 +223,7 @@ export function IntegratorBoard({
                         </div>
                       </Link>
                       <Link
-                        href={`/${rock.slug}/rocks/${rock.id}`}
+                        href={`/${rock.slug}/rocks/${rock.id}?from=integrator`}
                         className="shrink-0 mt-0.5"
                       >
                         <ChevronRightIcon className="h-4 w-4 text-muted-foreground" />
@@ -190,6 +257,7 @@ export function IntegratorBoard({
           );
         })}
       </div>
+      )}
     </div>
   );
 }
