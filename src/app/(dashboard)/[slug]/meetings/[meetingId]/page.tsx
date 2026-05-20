@@ -32,6 +32,27 @@ export default async function MeetingPage({ params }: PageProps) {
   });
   if (!meeting || meeting.businessId !== business.id) notFound();
 
+  // Find the previous meeting's todos
+  const previousMeeting = await prisma.meeting.findFirst({
+    where: {
+      businessId: business.id,
+      id: { not: meeting.id },
+      date: { lt: meeting.date },
+    },
+    orderBy: { date: "desc" },
+    include: {
+      todos: { include: { owner: true } },
+    },
+  });
+
+  const previousTodos = (previousMeeting?.todos ?? []).map((t) => ({
+    id: t.id,
+    title: t.title,
+    done: t.done,
+    ownerName: t.owner.name,
+    rockId: t.rockId,
+  }));
+
   const rocks = await prisma.rock.findMany({
     where: { businessId: business.id, quarter: getCurrentQuarter().quarter, year: getCurrentQuarter().year },
     include: { owner: true },
@@ -121,6 +142,7 @@ export default async function MeetingPage({ params }: PageProps) {
           latestActual: m.entries[0]?.actual ?? null,
           onTrack: m.entries[0]?.onTrack ?? null,
         }))}
+        previousTodos={previousTodos}
         owners={owners}
         businessSlug={params.slug}
       />

@@ -43,10 +43,13 @@ interface Owner {
   name: string;
 }
 
+type TodoItem = { id: string; title: string; done: boolean; ownerName: string; rockId: string | null };
+
 interface MeetingRunnerProps {
   meeting: MeetingData;
   rocks: RockData[];
   measurables: MeasurableData[];
+  previousTodos: TodoItem[];
   owners: Owner[];
   businessSlug: string;
 }
@@ -56,13 +59,14 @@ const SECTIONS = [
   { id: 1, label: "Scorecard" },
   { id: 2, label: "Rocks Review" },
   { id: 3, label: "Issues (IDS)" },
-  { id: 4, label: "To-Dos" },
-  { id: 5, label: "Conclude" },
+  { id: 4, label: "Previous To-Dos" },
+  { id: 5, label: "New To-Dos" },
+  { id: 6, label: "Conclude" },
 ];
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function MeetingRunner({ meeting, rocks, measurables, owners, businessSlug }: MeetingRunnerProps) {
+export function MeetingRunner({ meeting, rocks, measurables, previousTodos, owners, businessSlug }: MeetingRunnerProps) {
   const [section, setSection] = useState(0);
   const isCompleted = !!meeting.endedAt;
 
@@ -104,9 +108,12 @@ export function MeetingRunner({ meeting, rocks, measurables, owners, businessSlu
             <IssuesSection meeting={meeting} readOnly={isCompleted} />
           )}
           {section === 4 && (
-            <TodosSection meeting={meeting} owners={owners} rocks={rocks} readOnly={isCompleted} />
+            <PreviousTodosSection todos={previousTodos} rocks={rocks} />
           )}
           {section === 5 && (
+            <TodosSection meeting={meeting} owners={owners} rocks={rocks} readOnly={isCompleted} />
+          )}
+          {section === 6 && (
             <ConcludeSection meeting={meeting} owners={owners} readOnly={isCompleted} businessSlug={businessSlug} />
           )}
         </CardContent>
@@ -380,7 +387,66 @@ function IssuesSection({ meeting, readOnly }: { meeting: MeetingData; readOnly: 
   );
 }
 
-// ─── Section: To-Dos ──────────────────────────────────────────────────────────
+// ─── Section: Previous To-Dos ─────────────────────────────────────────────────
+
+function PreviousTodosSection({ todos, rocks }: { todos: TodoItem[]; rocks: RockData[] }) {
+  const [isPending, startTransition] = useTransition();
+
+  function handleToggle(todoId: string) {
+    startTransition(() => toggleTodo(todoId));
+  }
+
+  function handleRockChange(todoId: string, rockId: string) {
+    startTransition(() => updateTodoRock(todoId, rockId || null));
+  }
+
+  if (todos.length === 0) {
+    return (
+      <div className="flex flex-col gap-3">
+        <p className="text-sm text-muted-foreground">No to-dos from the previous meeting.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-sm text-muted-foreground">Review to-dos from the previous meeting.</p>
+
+      {todos.map((todo) => (
+        <div key={todo.id} className={`flex items-center gap-3 rounded-lg border p-3 ${todo.done ? "bg-muted/50" : ""}`}>
+          <button
+            onClick={() => handleToggle(todo.id)}
+            disabled={isPending}
+            className="shrink-0 disabled:opacity-50"
+          >
+            {todo.done ? (
+              <CheckSquareIcon className="h-5 w-5 text-green-500" />
+            ) : (
+              <SquareIcon className="h-5 w-5 text-muted-foreground" />
+            )}
+          </button>
+          <div className="flex-1 min-w-0">
+            <p className={`text-sm ${todo.done ? "line-through text-muted-foreground" : ""}`}>{todo.title}</p>
+            <p className="text-xs text-muted-foreground">{todo.ownerName}</p>
+          </div>
+          <select
+            value={todo.rockId ?? ""}
+            onChange={(e) => handleRockChange(todo.id, e.target.value)}
+            disabled={isPending}
+            className="h-8 rounded-md border border-input bg-background px-2 text-xs shadow-sm max-w-[180px] disabled:opacity-50"
+          >
+            <option value="">No rock</option>
+            {rocks.map((r) => (
+              <option key={r.id} value={r.id}>{r.title}</option>
+            ))}
+          </select>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Section: New To-Dos ──────────────────────────────────────────────────────
 
 function TodosSection({ meeting, owners, rocks, readOnly }: { meeting: MeetingData; owners: Owner[]; rocks: RockData[]; readOnly: boolean }) {
   const [isPending, startTransition] = useTransition();
