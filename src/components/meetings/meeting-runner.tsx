@@ -3,12 +3,12 @@
 import { useState, useTransition } from "react";
 import { saveSegue, addIssue, resolveIssue, saveRating, endMeeting } from "@/app/actions/meetings";
 import { toggleRock } from "@/app/actions/rocks";
-import { createTodo } from "@/app/actions/todos";
+import { createTodo, toggleTodo, updateTodoRock } from "@/app/actions/todos";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CheckCircle2Icon, CircleIcon, SquareIcon, ChevronRightIcon, ChevronLeftIcon } from "lucide-react";
+import { CheckCircle2Icon, CircleIcon, CheckSquareIcon, SquareIcon, ChevronRightIcon, ChevronLeftIcon } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -19,7 +19,7 @@ interface MeetingData {
   segues: Array<{ id: string; userId: string; userName: string; personal: string; professional: string }>;
   issues: Array<{ id: string; title: string; notes: string; resolved: boolean }>;
   ratings: Array<{ id: string; userId: string; userName: string; rating: number }>;
-  todos: Array<{ id: string; title: string; done: boolean; ownerName: string }>;
+  todos: Array<{ id: string; title: string; done: boolean; ownerName: string; rockId: string | null }>;
 }
 
 interface RockData {
@@ -104,7 +104,7 @@ export function MeetingRunner({ meeting, rocks, measurables, owners, businessSlu
             <IssuesSection meeting={meeting} readOnly={isCompleted} />
           )}
           {section === 4 && (
-            <TodosSection meeting={meeting} owners={owners} readOnly={isCompleted} />
+            <TodosSection meeting={meeting} owners={owners} rocks={rocks} readOnly={isCompleted} />
           )}
           {section === 5 && (
             <ConcludeSection meeting={meeting} owners={owners} readOnly={isCompleted} businessSlug={businessSlug} />
@@ -382,7 +382,7 @@ function IssuesSection({ meeting, readOnly }: { meeting: MeetingData; readOnly: 
 
 // ─── Section: To-Dos ──────────────────────────────────────────────────────────
 
-function TodosSection({ meeting, owners, readOnly }: { meeting: MeetingData; owners: Owner[]; readOnly: boolean }) {
+function TodosSection({ meeting, owners, rocks, readOnly }: { meeting: MeetingData; owners: Owner[]; rocks: RockData[]; readOnly: boolean }) {
   const [isPending, startTransition] = useTransition();
   const [title, setTitle] = useState("");
   const [ownerId, setOwnerId] = useState(owners[0]?.id ?? "");
@@ -400,17 +400,46 @@ function TodosSection({ meeting, owners, readOnly }: { meeting: MeetingData; own
     });
   }
 
+  function handleToggle(todoId: string) {
+    startTransition(() => toggleTodo(todoId));
+  }
+
+  function handleRockChange(todoId: string, rockId: string) {
+    startTransition(() => updateTodoRock(todoId, rockId || null));
+  }
+
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-muted-foreground">Create 7-day action items from the meeting.</p>
 
       {meeting.todos.map((todo) => (
-        <div key={todo.id} className="flex items-center gap-3 rounded-lg border p-3">
-          <SquareIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+        <div key={todo.id} className={`flex items-center gap-3 rounded-lg border p-3 ${todo.done ? "bg-muted/50" : ""}`}>
+          <button
+            onClick={() => handleToggle(todo.id)}
+            disabled={isPending}
+            className="shrink-0 disabled:opacity-50"
+          >
+            {todo.done ? (
+              <CheckSquareIcon className="h-5 w-5 text-green-500" />
+            ) : (
+              <SquareIcon className="h-5 w-5 text-muted-foreground" />
+            )}
+          </button>
           <div className="flex-1 min-w-0">
-            <p className="text-sm">{todo.title}</p>
+            <p className={`text-sm ${todo.done ? "line-through text-muted-foreground" : ""}`}>{todo.title}</p>
             <p className="text-xs text-muted-foreground">{todo.ownerName}</p>
           </div>
+          <select
+            value={todo.rockId ?? ""}
+            onChange={(e) => handleRockChange(todo.id, e.target.value)}
+            disabled={isPending}
+            className="h-8 rounded-md border border-input bg-background px-2 text-xs shadow-sm max-w-[180px] disabled:opacity-50"
+          >
+            <option value="">No rock</option>
+            {rocks.map((r) => (
+              <option key={r.id} value={r.id}>{r.title}</option>
+            ))}
+          </select>
         </div>
       ))}
 

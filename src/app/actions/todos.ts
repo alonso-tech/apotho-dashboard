@@ -156,6 +156,25 @@ export async function updateTodoDates(todoId: string, startDate: string | null, 
   revalidatePath("/my-todos");
 }
 
+export async function updateTodoRock(todoId: string, rockId: string | null) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) throw new Error("Unauthorized");
+
+  const todo = await prisma.todo.findUnique({ where: { id: todoId }, include: { business: true } });
+  if (!todo) throw new Error("Todo not found");
+
+  await prisma.todo.update({
+    where: { id: todoId },
+    data: { rockId, milestoneId: rockId ? todo.milestoneId : null },
+  });
+
+  revalidatePath(`/${todo.business.slug}/todos`);
+  revalidatePath(`/${todo.business.slug}/meetings`);
+  if (todo.rockId) revalidatePath(`/${todo.business.slug}/rocks/${todo.rockId}`);
+  if (rockId) revalidatePath(`/${todo.business.slug}/rocks/${rockId}`);
+  revalidatePath("/my-todos");
+}
+
 export async function updateTodoMilestone(todoId: string, milestoneId: string | null) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) throw new Error("Unauthorized");

@@ -104,6 +104,7 @@ export default async function MeetingPage({ params }: PageProps) {
             title: t.title,
             done: t.done,
             ownerName: t.owner.name,
+            rockId: t.rockId,
           })),
         }}
         rocks={rocks.map((r) => ({
