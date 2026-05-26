@@ -5,6 +5,7 @@ const { Client } = require("pg");
 const EVO_KEY = process.env.NOTION_EVO_KEY;
 const SENTRI_KEY = process.env.NOTION_SENTRI_KEY;
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
+const VICTOR_KEY = process.env.VICTOR_API_KEY;
 
 // MDT = UTC-6. Notion displays dates in user's timezone.
 const TZ_OFFSET_HOURS = 6;
@@ -127,13 +128,7 @@ function buildWeeks(qStart, qEnd) {
 }
 
 async function syncEvolution(qStart, qEnd) {
-  console.log("\n=== Evolution Drafting ===");
-  const DB = {
-    terraform: "4744e36c-8f09-491e-b054-82fd117e5e4b",
-    bids: "f7b0b0db-279c-4cc1-9005-2c5712d29e1e",
-    jobs: "ce4aa69c-f909-4422-8451-55cda1219f91",
-    commissions: "1db39750-91c8-805d-9972-c3fc1b8073de",
-  };
+  console.log("\n=== Evolution Drafting (Victor + Stripe) ===");
   const IDS = {
     leads: "cmnghk4n2002eg0vp8xnlce1r",
     answerRate: "cmo99tx3c00000ajvtdf2fsct",
@@ -149,56 +144,19 @@ async function syncEvolution(qStart, qEnd) {
     bbb: "cmo97qnak00010al5qo6fjsfr",
   };
 
-  const weeks = buildWeeks(qStart, qEnd);
-  const dataStart = weeks[0].start; // Full week start (may be before quarter start)
-  const df = { on_or_after: dataStart, on_or_before: qEnd };
+  // 1. Fetch Victor scorecard data
+  console.log(`  Fetching Victor scorecard (${qStart} to ${qEnd})...`);
+  const victorRes = await fetch(
+    `https://victor-evo.vercel.app/api/v1/scorecards/company-weekly?from=${qStart}&to=${qEnd}`,
+    { headers: { Authorization: `Bearer ${VICTOR_KEY}` } }
+  );
+  const victorData = await victorRes.json();
+  if (victorData.error) { console.error("  Victor error:", victorData.error); return; }
+  console.log(`  Victor weeks: ${victorData.data.length}`);
 
-  // Leads (sorted desc — created_time filter broken on this DB)
-  console.log(`  Fetching leads from ${dataStart} (sorted desc with MDT offset)...`);
-  const allLeads = await queryNotionSorted(EVO_KEY, DB.terraform, localToUTCStart(dataStart));
-  console.log(`  ${allLeads.length} leads`);
-
-  // Bids (Deposit Paid = Sales), Final Paid (= Finals Collected), Jobs (sorted desc), Commissions
-  console.log("  Fetching bids, jobs, finals, commissions...");
-  const [allBids, allFinalPaid, allComms] = await Promise.all([
-    queryNotion(EVO_KEY, DB.bids, { property: "Deposit Paid", date: df }),
-    queryNotion(EVO_KEY, DB.bids, { property: "Final Paid", date: df }),
-    queryNotion(EVO_KEY, DB.commissions, { property: "Transaction Date", date: df }),
-  ]);
-
-  // Jobs: sort descending by Job Submitted and stop at data start (date filter is unreliable)
-  console.log("  Fetching jobs (sorted desc)...");
-  const allJobsRaw = [];
-  let jobCursor;
-  while (true) {
-    const body = { sorts: [{ property: "Job Submitted", direction: "descending" }], page_size: 100 };
-    if (jobCursor) body.start_cursor = jobCursor;
-    const res = await fetch(`https://api.notion.com/v1/databases/${DB.jobs}/query`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${EVO_KEY}`, "Notion-Version": "2022-06-28", "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    let stop = false;
-    for (const r of data.results || []) {
-      const js = r.properties?.["Job Submitted"]?.date?.start || "";
-      if (js && js.split("T")[0] < dataStart) { stop = true; break; }
-      allJobsRaw.push(r);
-    }
-    if (stop || !data.has_more) break;
-    jobCursor = data.next_cursor;
-  }
-  // Filter to only jobs with Job Submitted in our date range
-  const allJobs = allJobsRaw.filter(j => {
-    const js = j.properties?.["Job Submitted"]?.date?.start;
-    return js && js.split("T")[0] >= dataStart;
-  });
-
-  console.log(`  Bids: ${allBids.length}, Finals: ${allFinalPaid.length}, Jobs: ${allJobs.length}, Comms: ${allComms.length}`);
-
-  // Stripe revenue
+  // 2. Fetch Stripe payouts for revenue
   console.log("  Fetching Stripe payouts...");
-  const startTs = Math.floor(new Date(dataStart + "T00:00:00Z").getTime() / 1000);
+  const startTs = Math.floor(new Date(qStart + "T00:00:00Z").getTime() / 1000);
   const endTs = Math.floor(new Date(qEnd + "T23:59:59Z").getTime() / 1000);
   const payouts = [];
   let hasMore = true, startingAfter;
@@ -215,78 +173,42 @@ async function syncEvolution(qStart, qEnd) {
   }
   console.log(`  Stripe payouts: ${payouts.length}`);
 
+  // 3. Upsert each week
   let count = 0;
-  for (const week of weeks) {
-    let leads = 0, noAnswer = 0, sold = 0, completed = 0, finals = 0, upsell = 0, stripeRev = 0;
+  for (const week of victorData.data) {
+    const weekKey = week.weekStart; // Sunday YYYY-MM-DD
 
-    // Leads: use created_time with MDT offset
-    for (const l of allLeads) {
-      if (inLocalWeek(l.created_time, week.start, week.end)) {
-        leads++;
-        const status = (l.properties?.Status?.status?.name || "").toLowerCase();
-        if (status === "no answer" || status === "never answered") noAnswer++;
-      }
+    // Skip partial current week if it has no meaningful data
+    if (victorData.meta.currentWeekIsPartial && weekKey === victorData.meta.currentWeekStart && week.leadsByWeek === 0 && week.salesCount === 0) {
+      console.log(`  ${weekKey}: skipping (partial current week with no data)`);
+      continue;
     }
 
-    // Sales: Deposit Paid date (date property, use direct comparison)
-    for (const b of allBids) {
-      if (dateInRange(b.properties?.["Deposit Paid"]?.date?.start, week.start, week.end)) sold++;
-    }
+    // Victor data
+    await upsert(IDS.leads, weekKey, week.leadsByWeek);
+    await upsert(IDS.answerRate, weekKey, week.answerRatePercent.toFixed(1));
+    await upsert(IDS.conversion, weekKey, week.conversionRatePercent.toFixed(1));
+    await upsert(IDS.sales, weekKey, week.salesCount);
+    await upsert(IDS.jobsCompleted, weekKey, week.jobsCompleted);
+    await upsert(IDS.finalsCollected, weekKey, week.finalsCollected);
+    await upsert(IDS.avgTurnaround, weekKey, week.avgTurnaroundDays.toFixed(1));
+    await upsert(IDS.upsellRevenue, weekKey, Math.round(week.revenueFromUpsellsCents / 100));
 
-    // Jobs Completed: Job Submitted on Jobs DB + track turnaround times
-    const weekTurnarounds = [];
-    for (const j of allJobs) {
-      const js = j.properties?.["Job Submitted"]?.date?.start;
-      if (js && js.split("T")[0] >= week.start && js.split("T")[0] <= week.end) {
-        completed++;
-        const tt = j.properties?.["Turn Time"]?.formula?.number;
-        if (tt != null) weekTurnarounds.push(Math.abs(tt));
-      }
-    }
-
-    // Finals Collected: Final Paid on Service Pipeline (only 2026 dates)
-    for (const b of allFinalPaid) {
-      const fp = b.properties?.["Final Paid"]?.date?.start || "";
-      if (fp.startsWith("2026-") && dateInRange(fp, week.start, week.end)) finals++;
-    }
-
-    // Upsell revenue: not Initial or Final payment type
-    for (const c of allComms) {
-      const td = c.properties?.["Transaction Date"]?.date?.start || "";
-      if (!dateInRange(td, week.start, week.end)) continue;
-      const pt = (c.properties?.["Payment Type"]?.rich_text?.[0]?.plain_text || "").toLowerCase().trim();
-      if (pt && !pt.includes("initial") && !pt.includes("final")) {
-        upsell += c.properties?.["Transaction Amount"]?.number || 0;
-      }
-    }
-
-    // Stripe revenue
+    // Stripe revenue for this week
+    let stripeRev = 0;
     for (const p of payouts) {
       const ad = new Date((p.arrival_date || p.created) * 1000).toISOString().split("T")[0];
-      if (ad >= week.start && ad <= week.end) stripeRev += p.amount / 100;
+      if (ad >= week.weekStart && ad <= week.weekEnd) stripeRev += p.amount / 100;
     }
+    await upsert(IDS.revenue, weekKey, Math.round(stripeRev));
 
-    // Answer rate = (leads that ARE answered) / total
-    const answered = leads - noAnswer;
-    const ar = leads > 0 ? ((answered / leads) * 100).toFixed(1) : "0";
-    const cr = leads > 0 ? ((sold / leads) * 100).toFixed(1) : "0";
-
-    await upsert(IDS.leads, week.key, leads);
-    await upsert(IDS.answerRate, week.key, ar);
-    await upsert(IDS.conversion, week.key, cr);
-    await upsert(IDS.sales, week.key, sold);
-    await upsert(IDS.jobsCompleted, week.key, completed);
-    await upsert(IDS.finalsCollected, week.key, finals);
-    await upsert(IDS.revenue, week.key, Math.round(stripeRev));
-    const avgTT = weekTurnarounds.length > 0 ? (weekTurnarounds.reduce((a, b) => a + b, 0) / weekTurnarounds.length).toFixed(1) : "0";
-    await upsert(IDS.avgTurnaround, week.key, avgTT);
-    await upsert(IDS.upsellRevenue, week.key, Math.round(upsell));
-    await upsert(IDS.google, week.key, "4.1");
-    await upsert(IDS.angi, week.key, "3.8");
-    await upsert(IDS.bbb, week.key, "1.0");
+    // Platform ratings (static for now — TODO: pull from Google API)
+    await upsert(IDS.google, weekKey, "4.1");
+    await upsert(IDS.angi, weekKey, "3.8");
+    await upsert(IDS.bbb, weekKey, "1.0");
     count += 12;
 
-    console.log(`  ${week.key}: leads=${leads} ar=${ar}% cr=${cr}% sold=${sold} jobs=${completed} finals=${finals} tt=${avgTT}d rev=$${Math.round(stripeRev)} upsell=$${Math.round(upsell)}`);
+    console.log(`  ${weekKey}: leads=${week.leadsByWeek} ar=${week.answerRatePercent.toFixed(1)}% cr=${week.conversionRatePercent.toFixed(1)}% sold=${week.salesCount} jobs=${week.jobsCompleted} finals=${week.finalsCollected} tt=${week.avgTurnaroundDays.toFixed(1)}d rev=$${Math.round(stripeRev)} upsell=$${Math.round(week.revenueFromUpsellsCents / 100)}`);
   }
   console.log(`  Total: ${count} entries`);
 }
