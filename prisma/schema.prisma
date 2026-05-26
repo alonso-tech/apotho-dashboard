@@ -32,6 +32,7 @@ model User {
   rockNotes       RockNote[]
   notifications   Notification[]
   milestones      RockMilestone[]
+  apiKeys         ApiKey[]
 }
 
 model Business {
@@ -245,6 +246,22 @@ model MeasurableEntry {
   measurable   Measurable @relation(fields: [measurableId], references: [id], onDelete: Cascade)
 
   @@unique([measurableId, weekOf])
+}
+
+// ─── API Keys ─────────────────────────────────────────────────────────────────
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  name       String
+  keyHash    String    @unique
+  keyPrefix  String
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 // ─── NextAuth required models ─────────────────────────────────────────────────

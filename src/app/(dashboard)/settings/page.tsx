@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { SettingsForm } from "@/components/settings-form";
+import { ApiKeysSection } from "@/components/api-keys-section";
 
 export default async function SettingsPage() {
   const session = await getServerSession(authOptions);
@@ -18,6 +19,8 @@ export default async function SettingsPage() {
         userName={session.user.name ?? ""}
         userEmail={session.user.email ?? ""}
       />
+
+      <ApiKeysSection />
     </div>
   );
 }
