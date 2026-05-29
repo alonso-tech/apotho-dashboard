@@ -3,12 +3,12 @@
 import { useState, useTransition } from "react";
 import { saveSegue, addIssue, resolveIssue, saveRating, endMeeting } from "@/app/actions/meetings";
 import { toggleRock } from "@/app/actions/rocks";
-import { createTodo, toggleTodo, updateTodoRock } from "@/app/actions/todos";
+import { createTodo, toggleTodo, updateTodoRock, updateTodoOwner, killTodo } from "@/app/actions/todos";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CheckCircle2Icon, CircleIcon, CheckSquareIcon, SquareIcon, ChevronRightIcon, ChevronLeftIcon } from "lucide-react";
+import { CheckCircle2Icon, CircleIcon, CheckSquareIcon, SquareIcon, ChevronRightIcon, ChevronLeftIcon, ArrowRightIcon, BanIcon, ListPlusIcon } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -17,9 +17,9 @@ interface MeetingData {
   businessId: string;
   endedAt: string | null;
   segues: Array<{ id: string; userId: string; userName: string; personal: string; professional: string }>;
-  issues: Array<{ id: string; title: string; notes: string; resolved: boolean }>;
+  issues: Array<{ id: string; title: string; notes: string; resolved: boolean; meetingId: string }>;
   ratings: Array<{ id: string; userId: string; userName: string; rating: number }>;
-  todos: Array<{ id: string; title: string; done: boolean; ownerName: string; rockId: string | null }>;
+  todos: Array<{ id: string; title: string; done: boolean; ownerName: string; ownerId: string; rockId: string | null }>;
 }
 
 interface RockData {
@@ -43,13 +43,15 @@ interface Owner {
   name: string;
 }
 
-type TodoItem = { id: string; title: string; done: boolean; ownerName: string; rockId: string | null };
+type TodoItem = { id: string; title: string; done: boolean; ownerName: string; ownerId: string; rockId: string | null };
+type IssueItem = { id: string; title: string; notes: string; resolved: boolean; meetingId: string };
 
 interface MeetingRunnerProps {
   meeting: MeetingData;
   rocks: RockData[];
   measurables: MeasurableData[];
   previousTodos: TodoItem[];
+  previousIssues: IssueItem[];
   owners: Owner[];
   businessSlug: string;
 }
@@ -57,16 +59,16 @@ interface MeetingRunnerProps {
 const SECTIONS = [
   { id: 0, label: "Segue" },
   { id: 1, label: "Scorecard" },
-  { id: 2, label: "Rocks Review" },
-  { id: 3, label: "Issues (IDS)" },
-  { id: 4, label: "Previous To-Dos" },
+  { id: 2, label: "Previous To-Dos" },
+  { id: 3, label: "Rocks Review" },
+  { id: 4, label: "Issues (IDS)" },
   { id: 5, label: "New To-Dos" },
   { id: 6, label: "Conclude" },
 ];
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function MeetingRunner({ meeting, rocks, measurables, previousTodos, owners, businessSlug }: MeetingRunnerProps) {
+export function MeetingRunner({ meeting, rocks, measurables, previousTodos, previousIssues, owners, businessSlug }: MeetingRunnerProps) {
   const [section, setSection] = useState(0);
   const isCompleted = !!meeting.endedAt;
 
@@ -102,13 +104,13 @@ export function MeetingRunner({ meeting, rocks, measurables, previousTodos, owne
             <ScorecardSection measurables={measurables} />
           )}
           {section === 2 && (
-            <RocksSection rocks={rocks} readOnly={isCompleted} />
+            <PreviousTodosSection todos={previousTodos} rocks={rocks} meeting={meeting} owners={owners} />
           )}
           {section === 3 && (
-            <IssuesSection meeting={meeting} readOnly={isCompleted} />
+            <RocksSection rocks={rocks} readOnly={isCompleted} />
           )}
           {section === 4 && (
-            <PreviousTodosSection todos={previousTodos} rocks={rocks} />
+            <IssuesSection meeting={meeting} previousIssues={previousIssues} owners={owners} readOnly={isCompleted} />
           )}
           {section === 5 && (
             <TodosSection meeting={meeting} owners={owners} rocks={rocks} readOnly={isCompleted} />
@@ -262,6 +264,91 @@ function ScorecardSection({ measurables }: { measurables: MeasurableData[] }) {
   );
 }
 
+// ─── Section: Previous To-Dos ─────────────────────────────────────────────────
+
+function PreviousTodosSection({ todos, rocks, meeting, owners }: { todos: TodoItem[]; rocks: RockData[]; meeting: MeetingData; owners: Owner[] }) {
+  const [isPending, startTransition] = useTransition();
+
+  function handleToggle(todoId: string) {
+    startTransition(() => toggleTodo(todoId));
+  }
+
+  function handlePush(todo: TodoItem) {
+    // Create a new to-do in this meeting from the previous one
+    const fd = new FormData();
+    fd.append("title", todo.title);
+    fd.append("businessId", meeting.businessId);
+    fd.append("meetingId", meeting.id);
+    fd.append("ownerId", todo.ownerId);
+    startTransition(() => createTodo(fd));
+  }
+
+  function handleKill(todoId: string) {
+    startTransition(() => killTodo(todoId));
+  }
+
+  function handleRockChange(todoId: string, rockId: string) {
+    startTransition(() => updateTodoRock(todoId, rockId || null));
+  }
+
+  function handleOwnerChange(todoId: string, newOwnerId: string) {
+    startTransition(() => updateTodoOwner(todoId, newOwnerId));
+  }
+
+  if (todos.length === 0) {
+    return (
+      <div className="flex flex-col gap-3">
+        <p className="text-sm text-muted-foreground">No to-dos from the previous meeting.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-sm text-muted-foreground">Review to-dos from the previous meeting. <strong>Done</strong> = mark complete, <strong>Push</strong> = carry to new to-dos, <strong>Kill</strong> = move to issues.</p>
+
+      {todos.map((todo) => (
+        <div key={todo.id} className={`flex items-center gap-2 rounded-lg border p-3 ${todo.done ? "bg-muted/50" : ""}`}>
+          <button onClick={() => handleToggle(todo.id)} disabled={isPending} className="shrink-0 disabled:opacity-50" title="Done">
+            {todo.done ? <CheckSquareIcon className="h-5 w-5 text-green-500" /> : <SquareIcon className="h-5 w-5 text-muted-foreground" />}
+          </button>
+          <div className="flex-1 min-w-0">
+            <p className={`text-sm ${todo.done ? "line-through text-muted-foreground" : ""}`}>{todo.title}</p>
+            <p className="text-xs text-muted-foreground">{todo.ownerName}</p>
+          </div>
+          <select
+            value={todo.ownerId}
+            onChange={(e) => handleOwnerChange(todo.id, e.target.value)}
+            disabled={isPending}
+            className="h-8 rounded-md border border-input bg-background px-2 text-xs shadow-sm max-w-[120px] disabled:opacity-50"
+          >
+            {owners.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </select>
+          <select
+            value={todo.rockId ?? ""}
+            onChange={(e) => handleRockChange(todo.id, e.target.value)}
+            disabled={isPending}
+            className="h-8 rounded-md border border-input bg-background px-2 text-xs shadow-sm max-w-[150px] disabled:opacity-50"
+          >
+            <option value="">No rock</option>
+            {rocks.map((r) => <option key={r.id} value={r.id}>{r.title}</option>)}
+          </select>
+          {!todo.done && (
+            <>
+              <Button size="sm" variant="outline" onClick={() => handlePush(todo)} disabled={isPending} title="Push to new to-dos" className="h-8 px-2">
+                <ArrowRightIcon className="h-3.5 w-3.5" />
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => handleKill(todo.id)} disabled={isPending} title="Kill — move to issues" className="h-8 px-2 text-red-500 hover:text-red-600">
+                <BanIcon className="h-3.5 w-3.5" />
+              </Button>
+            </>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Section: Rocks Review ────────────────────────────────────────────────────
 
 function RocksSection({ rocks, readOnly }: { rocks: RockData[]; readOnly: boolean }) {
@@ -311,10 +398,14 @@ function RocksSection({ rocks, readOnly }: { rocks: RockData[]; readOnly: boolea
 
 // ─── Section: Issues (IDS) ────────────────────────────────────────────────────
 
-function IssuesSection({ meeting, readOnly }: { meeting: MeetingData; readOnly: boolean }) {
+function IssuesSection({ meeting, previousIssues, owners, readOnly }: { meeting: MeetingData; previousIssues: IssueItem[]; owners: Owner[]; readOnly: boolean }) {
   const [isPending, startTransition] = useTransition();
   const [newIssue, setNewIssue] = useState("");
   const [resolveNotes, setResolveNotes] = useState<Record<string, string>>({});
+
+  // Combine previous unresolved issues with current meeting issues
+  const previousUnresolved = previousIssues.filter((i) => !i.resolved && !meeting.issues.some((mi) => mi.title === i.title));
+  const allIssues = [...meeting.issues];
 
   function handleAdd() {
     if (!newIssue.trim()) return;
@@ -331,11 +422,46 @@ function IssuesSection({ meeting, readOnly }: { meeting: MeetingData; readOnly: 
     startTransition(() => resolveIssue(issueId, resolveNotes[issueId] ?? ""));
   }
 
+  function handlePushToTodo(issueTitle: string, ownerId: string) {
+    const fd = new FormData();
+    fd.append("title", issueTitle);
+    fd.append("businessId", meeting.businessId);
+    fd.append("meetingId", meeting.id);
+    fd.append("ownerId", ownerId);
+    startTransition(() => createTodo(fd));
+  }
+
+  // Carry over a previous issue into this meeting
+  function handleCarryIssue(issue: IssueItem) {
+    const fd = new FormData();
+    fd.append("meetingId", meeting.id);
+    fd.append("title", issue.title);
+    startTransition(() => addIssue(fd));
+  }
+
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-muted-foreground">Identify, Discuss, Solve — add issues and resolve them.</p>
 
-      {meeting.issues.map((issue) => (
+      {/* Previous unresolved issues */}
+      {previousUnresolved.length > 0 && (
+        <div className="mb-2">
+          <p className="text-xs font-medium text-muted-foreground mb-1">Unresolved from previous meeting:</p>
+          {previousUnresolved.map((issue) => (
+            <div key={issue.id} className="flex items-center gap-2 rounded-lg border border-dashed border-orange-300 p-2 mb-1">
+              <CircleIcon className="h-4 w-4 text-orange-400 shrink-0" />
+              <p className="text-sm flex-1">{issue.title}</p>
+              {!readOnly && (
+                <Button size="sm" variant="outline" onClick={() => handleCarryIssue(issue)} disabled={isPending} className="h-7 text-xs">
+                  Add to this meeting
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {allIssues.map((issue) => (
         <div key={issue.id} className={`rounded-lg border p-3 ${issue.resolved ? "bg-muted/50 opacity-70" : ""}`}>
           <div className="flex items-start gap-2">
             <div className="mt-0.5 shrink-0">
@@ -366,6 +492,11 @@ function IssuesSection({ meeting, readOnly }: { meeting: MeetingData; readOnly: 
                 </div>
               )}
             </div>
+            {!issue.resolved && !readOnly && (
+              <Button size="sm" variant="outline" onClick={() => handlePushToTodo(issue.title, owners[0]?.id)} disabled={isPending} title="Create to-do from this issue" className="h-8 px-2 shrink-0">
+                <ListPlusIcon className="h-3.5 w-3.5" />
+              </Button>
+            )}
           </div>
         </div>
       ))}
@@ -383,65 +514,6 @@ function IssuesSection({ meeting, readOnly }: { meeting: MeetingData; readOnly: 
           </Button>
         </div>
       )}
-    </div>
-  );
-}
-
-// ─── Section: Previous To-Dos ─────────────────────────────────────────────────
-
-function PreviousTodosSection({ todos, rocks }: { todos: TodoItem[]; rocks: RockData[] }) {
-  const [isPending, startTransition] = useTransition();
-
-  function handleToggle(todoId: string) {
-    startTransition(() => toggleTodo(todoId));
-  }
-
-  function handleRockChange(todoId: string, rockId: string) {
-    startTransition(() => updateTodoRock(todoId, rockId || null));
-  }
-
-  if (todos.length === 0) {
-    return (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-muted-foreground">No to-dos from the previous meeting.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      <p className="text-sm text-muted-foreground">Review to-dos from the previous meeting.</p>
-
-      {todos.map((todo) => (
-        <div key={todo.id} className={`flex items-center gap-3 rounded-lg border p-3 ${todo.done ? "bg-muted/50" : ""}`}>
-          <button
-            onClick={() => handleToggle(todo.id)}
-            disabled={isPending}
-            className="shrink-0 disabled:opacity-50"
-          >
-            {todo.done ? (
-              <CheckSquareIcon className="h-5 w-5 text-green-500" />
-            ) : (
-              <SquareIcon className="h-5 w-5 text-muted-foreground" />
-            )}
-          </button>
-          <div className="flex-1 min-w-0">
-            <p className={`text-sm ${todo.done ? "line-through text-muted-foreground" : ""}`}>{todo.title}</p>
-            <p className="text-xs text-muted-foreground">{todo.ownerName}</p>
-          </div>
-          <select
-            value={todo.rockId ?? ""}
-            onChange={(e) => handleRockChange(todo.id, e.target.value)}
-            disabled={isPending}
-            className="h-8 rounded-md border border-input bg-background px-2 text-xs shadow-sm max-w-[180px] disabled:opacity-50"
-          >
-            <option value="">No rock</option>
-            {rocks.map((r) => (
-              <option key={r.id} value={r.id}>{r.title}</option>
-            ))}
-          </select>
-        </div>
-      ))}
     </div>
   );
 }
@@ -474,37 +546,39 @@ function TodosSection({ meeting, owners, rocks, readOnly }: { meeting: MeetingDa
     startTransition(() => updateTodoRock(todoId, rockId || null));
   }
 
+  function handleOwnerChange(todoId: string, newOwnerId: string) {
+    startTransition(() => updateTodoOwner(todoId, newOwnerId));
+  }
+
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-muted-foreground">Create 7-day action items from the meeting.</p>
 
       {meeting.todos.map((todo) => (
-        <div key={todo.id} className={`flex items-center gap-3 rounded-lg border p-3 ${todo.done ? "bg-muted/50" : ""}`}>
-          <button
-            onClick={() => handleToggle(todo.id)}
-            disabled={isPending}
-            className="shrink-0 disabled:opacity-50"
-          >
-            {todo.done ? (
-              <CheckSquareIcon className="h-5 w-5 text-green-500" />
-            ) : (
-              <SquareIcon className="h-5 w-5 text-muted-foreground" />
-            )}
+        <div key={todo.id} className={`flex items-center gap-2 rounded-lg border p-3 ${todo.done ? "bg-muted/50" : ""}`}>
+          <button onClick={() => handleToggle(todo.id)} disabled={isPending} className="shrink-0 disabled:opacity-50">
+            {todo.done ? <CheckSquareIcon className="h-5 w-5 text-green-500" /> : <SquareIcon className="h-5 w-5 text-muted-foreground" />}
           </button>
           <div className="flex-1 min-w-0">
             <p className={`text-sm ${todo.done ? "line-through text-muted-foreground" : ""}`}>{todo.title}</p>
             <p className="text-xs text-muted-foreground">{todo.ownerName}</p>
           </div>
           <select
+            value={todo.ownerId}
+            onChange={(e) => handleOwnerChange(todo.id, e.target.value)}
+            disabled={isPending}
+            className="h-8 rounded-md border border-input bg-background px-2 text-xs shadow-sm max-w-[120px] disabled:opacity-50"
+          >
+            {owners.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </select>
+          <select
             value={todo.rockId ?? ""}
             onChange={(e) => handleRockChange(todo.id, e.target.value)}
             disabled={isPending}
-            className="h-8 rounded-md border border-input bg-background px-2 text-xs shadow-sm max-w-[180px] disabled:opacity-50"
+            className="h-8 rounded-md border border-input bg-background px-2 text-xs shadow-sm max-w-[150px] disabled:opacity-50"
           >
             <option value="">No rock</option>
-            {rocks.map((r) => (
-              <option key={r.id} value={r.id}>{r.title}</option>
-            ))}
+            {rocks.map((r) => <option key={r.id} value={r.id}>{r.title}</option>)}
           </select>
         </div>
       ))}
@@ -576,7 +650,7 @@ function ConcludeSection({
 
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-sm text-muted-foreground">Rate the meeting 1–10 and end the session.</p>
+      <p className="text-sm text-muted-foreground">Rate the meeting 1–10 and end the session. Ending will email each person their to-dos.</p>
 
       {/* Existing ratings */}
       {meeting.ratings.length > 0 && (

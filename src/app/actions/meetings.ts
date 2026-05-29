@@ -25,7 +25,7 @@ export async function endMeeting(meetingId: string) {
 
   const meeting = await prisma.meeting.findUnique({
     where: { id: meetingId },
-    include: { ratings: true, business: true },
+    include: { ratings: true, business: true, todos: { include: { owner: true } } },
   });
   if (!meeting) throw new Error("Meeting not found");
 
@@ -38,6 +38,32 @@ export async function endMeeting(meetingId: string) {
     where: { id: meetingId },
     data: { endedAt: new Date(), avgRating: avg },
   });
+
+  // Send each person an email with their to-dos
+  const todosByOwner = new Map<string, { name: string; email: string; todos: string[] }>();
+  for (const todo of meeting.todos) {
+    if (!todosByOwner.has(todo.ownerId)) {
+      todosByOwner.set(todo.ownerId, { name: todo.owner.name, email: todo.owner.email, todos: [] });
+    }
+    todosByOwner.get(todo.ownerId)!.todos.push(todo.title);
+  }
+
+  const dateStr = meeting.date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+
+  // Fire-and-forget email sending
+  for (const entry of Array.from(todosByOwner.values())) {
+    const { name, email, todos } = entry;
+    const todoList = todos.map((t) => `• ${t}`).join("\n");
+    try {
+      // Use GWS CLI if available, otherwise skip silently
+      const { exec } = await import("child_process");
+      const body = `Hi ${name},\n\nHere are your to-dos from the ${meeting.business.name} Level 10 Meeting on ${dateStr}:\n\n${todoList}\n\nPlease complete these by next week's meeting.\n\n— Apotho Dashboard`;
+      const subject = `Your To-Dos — ${meeting.business.name} Meeting (${dateStr})`;
+      exec(`GOOGLE_WORKSPACE_CLI_CONFIG_DIR=~/.config/gws-evo gws gmail +send --to "${email}" --subject "${subject}" --body "${body.replace(/"/g, '\\"')}"`, () => {});
+    } catch {
+      // Silently fail — email is best-effort
+    }
+  }
 
   revalidatePath(`/${meeting.business.slug}/meetings`);
 }

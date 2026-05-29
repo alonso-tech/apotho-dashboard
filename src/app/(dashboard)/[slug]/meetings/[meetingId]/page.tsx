@@ -32,7 +32,7 @@ export default async function MeetingPage({ params }: PageProps) {
   });
   if (!meeting || meeting.businessId !== business.id) notFound();
 
-  // Find the previous meeting's todos
+  // Find the previous meeting's todos and issues
   const previousMeeting = await prisma.meeting.findFirst({
     where: {
       businessId: business.id,
@@ -42,15 +42,28 @@ export default async function MeetingPage({ params }: PageProps) {
     orderBy: { date: "desc" },
     include: {
       todos: { include: { owner: true } },
+      issues: true,
     },
   });
 
-  const previousTodos = (previousMeeting?.todos ?? []).map((t) => ({
-    id: t.id,
-    title: t.title,
-    done: t.done,
-    ownerName: t.owner.name,
-    rockId: t.rockId,
+  // Only carry over incomplete (not done, not killed) todos
+  const previousTodos = (previousMeeting?.todos ?? [])
+    .filter((t) => !t.done && !t.killed)
+    .map((t) => ({
+      id: t.id,
+      title: t.title,
+      done: t.done,
+      ownerName: t.owner.name,
+      ownerId: t.ownerId,
+      rockId: t.rockId,
+    }));
+
+  const previousIssues = (previousMeeting?.issues ?? []).map((i) => ({
+    id: i.id,
+    title: i.title,
+    notes: i.notes ?? "",
+    resolved: i.resolved,
+    meetingId: i.meetingId,
   }));
 
   const rocks = await prisma.rock.findMany({
@@ -113,6 +126,7 @@ export default async function MeetingPage({ params }: PageProps) {
             title: i.title,
             notes: i.notes ?? "",
             resolved: i.resolved,
+            meetingId: i.meetingId,
           })),
           ratings: meeting.ratings.map((r) => ({
             id: r.id,
@@ -125,6 +139,7 @@ export default async function MeetingPage({ params }: PageProps) {
             title: t.title,
             done: t.done,
             ownerName: t.owner.name,
+            ownerId: t.ownerId,
             rockId: t.rockId,
           })),
         }}
@@ -143,6 +158,7 @@ export default async function MeetingPage({ params }: PageProps) {
           onTrack: m.entries[0]?.onTrack ?? null,
         }))}
         previousTodos={previousTodos}
+        previousIssues={previousIssues}
         owners={owners}
         businessSlug={params.slug}
       />

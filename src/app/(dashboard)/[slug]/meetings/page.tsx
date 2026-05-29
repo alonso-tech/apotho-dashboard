@@ -20,6 +20,7 @@ export default async function MeetingsPage({ params }: PageProps) {
     where: { businessId: business.id },
     orderBy: { date: "desc" },
     take: 20,
+    include: { _count: { select: { todos: true } }, todos: { select: { done: true } } },
   });
 
   return (
@@ -62,11 +63,22 @@ export default async function MeetingsPage({ params }: PageProps) {
                       day: "numeric",
                     })}
                   </CardTitle>
-                  {meeting.avgRating !== null && (
-                    <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-blue-100 text-blue-700">
-                      Rating: {meeting.avgRating.toFixed(1)}/10
-                    </span>
-                  )}
+                  <div className="flex gap-2">
+                    {meeting.todos.length > 0 && (
+                      <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                        meeting.todos.filter((t) => t.done).length === meeting.todos.length
+                          ? "bg-green-100 text-green-700"
+                          : "bg-orange-100 text-orange-700"
+                      }`}>
+                        To-Dos: {meeting.todos.filter((t) => t.done).length}/{meeting.todos.length}
+                      </span>
+                    )}
+                    {meeting.avgRating !== null && (
+                      <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-blue-100 text-blue-700">
+                        Rating: {meeting.avgRating.toFixed(1)}/10
+                      </span>
+                    )}
+                  </div>
                 </div>
               </CardHeader>
               <CardContent>
