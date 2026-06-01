@@ -127,8 +127,27 @@ function buildWeeks(qStart, qEnd) {
   return weeks.filter((w) => w.start <= today);
 }
 
+async function paginateVictorDesc(endpoint, dateField, cutoffISO) {
+  const all = [];
+  let page = 1, done = false;
+  while (!done) {
+    const res = await fetch(
+      `https://victor-evo.vercel.app/api/v1/${endpoint}?limit=100&sort=${dateField}&order=desc&page=${page}`,
+      { headers: { Authorization: `Bearer ${VICTOR_KEY}` } }
+    );
+    const data = await res.json();
+    for (const item of data.data || []) {
+      if (item[dateField] && item[dateField] < cutoffISO) { done = true; break; }
+      all.push(item);
+    }
+    if (!data.data?.length || page >= (data.meta?.totalPages || 1)) done = true;
+    page++;
+  }
+  return all;
+}
+
 async function syncEvolution(qStart, qEnd) {
-  console.log("\n=== Evolution Drafting (Victor + Stripe) ===");
+  console.log("\n=== Evolution Drafting (Victor APIs + Stripe) ===");
   const IDS = {
     leads: "cmnghk4n2002eg0vp8xnlce1r",
     answerRate: "cmo99tx3c00000ajvtdf2fsct",
@@ -144,43 +163,38 @@ async function syncEvolution(qStart, qEnd) {
     bbb: "cmo97qnak00010al5qo6fjsfr",
   };
 
-  // 1. Fetch Victor scorecard data
-  console.log(`  Fetching Victor scorecard (${qStart} to ${qEnd})...`);
+  // Get week boundaries from Victor scorecard (used for week structure + answer rate + turnaround)
+  console.log(`  Fetching Victor scorecard for week structure...`);
   const victorRes = await fetch(
     `https://victor-evo.vercel.app/api/v1/scorecards/company-weekly?from=${qStart}&to=${qEnd}`,
     { headers: { Authorization: `Bearer ${VICTOR_KEY}` } }
   );
   const victorData = await victorRes.json();
   if (victorData.error) { console.error("  Victor error:", victorData.error); return; }
-  console.log(`  Victor weeks: ${victorData.data.length}`);
+  const weeks = victorData.data;
+  console.log(`  Weeks: ${weeks.length}`);
 
-  // 1b. Count TOTAL leads per week from Victor clients API (scorecard filters out junk)
-  console.log("  Counting total leads from clients API...");
-  const leadCounts = {};
-  let page = 1, pageDone = false;
   const cutoffISO = qStart + "T00:00:00.000Z";
-  while (!pageDone) {
-    const cRes = await fetch(
-      `https://victor-evo.vercel.app/api/v1/clients?limit=100&sort=createdAt&order=desc&page=${page}`,
-      { headers: { Authorization: `Bearer ${VICTOR_KEY}` } }
-    );
-    const cData = await cRes.json();
-    for (const client of cData.data || []) {
-      if (client.createdAt < cutoffISO) { pageDone = true; break; }
-      const dateStr = client.createdAt.split("T")[0];
-      for (const week of victorData.data) {
-        if (dateStr >= week.weekStart && dateStr <= week.weekEnd) {
-          leadCounts[week.weekStart] = (leadCounts[week.weekStart] || 0) + 1;
-          break;
-        }
-      }
-    }
-    if (!cData.data?.length || page >= cData.meta.totalPages) pageDone = true;
-    page++;
-  }
-  console.log(`  Lead counts from clients API:`, JSON.stringify(leadCounts));
 
-  // 2. Fetch Stripe payouts for revenue
+  // 1. Fetch ALL clients (leads) created since qStart
+  console.log("  Fetching clients (leads)...");
+  const allClients = await paginateVictorDesc("clients", "createdAt", cutoffISO);
+  console.log(`  Clients: ${allClients.length}`);
+
+  // 2. Fetch ALL paid revenue since qStart
+  console.log("  Fetching revenue (sales/finals/upsells)...");
+  const allRevenue = await paginateVictorDesc("revenue", "paidAt", cutoffISO);
+  // Filter to only paid
+  const paidRevenue = allRevenue.filter(r => r.status === "paid" && r.paidAt);
+  console.log(`  Paid revenue entries: ${paidRevenue.length}`);
+
+  // 3. Fetch completed projects since qStart
+  console.log("  Fetching projects (jobs completed)...");
+  const allProjects = await paginateVictorDesc("projects", "completedAt", cutoffISO);
+  const completedProjects = allProjects.filter(p => p.completedAt);
+  console.log(`  Completed projects: ${completedProjects.length}`);
+
+  // 4. Fetch Stripe payouts for revenue
   console.log("  Fetching Stripe payouts...");
   const startTs = Math.floor(new Date(qStart + "T00:00:00Z").getTime() / 1000);
   const endTs = Math.floor(new Date(qEnd + "T23:59:59Z").getTime() / 1000);
@@ -199,44 +213,58 @@ async function syncEvolution(qStart, qEnd) {
   }
   console.log(`  Stripe payouts: ${payouts.length}`);
 
-  // 3. Upsert each week
+  // 5. Bucket into weeks using MDT (UTC-6) boundaries to match Victor dashboards
+  //    Leads + finals from raw APIs; sales/upsells/jobs/ar/tt from scorecard (complex business logic)
   let count = 0;
-  for (const week of victorData.data) {
-    const weekKey = week.weekStart; // Sunday YYYY-MM-DD
+  for (const week of weeks) {
+    const weekKey = week.weekStart;
+    // MDT boundaries: Sunday 00:00 MDT = Sunday 06:00 UTC, Saturday 23:59 MDT = Sunday 05:59 UTC
+    const wStartUTC = week.weekStart + "T06:00:00.000Z";
+    const wEndUTC = week.weekEnd + "T06:00:00.000Z"; // start of next day in MDT = +1 day 06:00 UTC
+    const nextDay = new Date(week.weekEnd + "T00:00:00Z");
+    nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+    const wEndUTCFull = nextDay.toISOString().split("T")[0] + "T05:59:59.999Z";
 
-    // Skip partial current week if it has no meaningful data
-    if (victorData.meta.currentWeekIsPartial && weekKey === victorData.meta.currentWeekStart && week.leadsByWeek === 0 && week.salesCount === 0) {
-      console.log(`  ${weekKey}: skipping (partial current week with no data)`);
-      continue;
-    }
+    // Leads: count clients created in this week (MDT boundaries)
+    const leads = allClients.filter(c => c.createdAt >= wStartUTC && c.createdAt <= wEndUTCFull).length;
 
-    // Victor data — use real lead count from clients API, recalculate conversion
-    const totalLeads = leadCounts[weekKey] || week.leadsByWeek;
-    const cr = totalLeads > 0 ? ((week.salesCount / totalLeads) * 100).toFixed(1) : "0";
-    await upsert(IDS.leads, weekKey, totalLeads);
-    await upsert(IDS.answerRate, weekKey, week.answerRatePercent.toFixed(1));
-    await upsert(IDS.conversion, weekKey, cr);
-    await upsert(IDS.sales, weekKey, week.salesCount);
-    await upsert(IDS.jobsCompleted, weekKey, week.jobsCompleted);
-    await upsert(IDS.finalsCollected, weekKey, week.finalsCollected);
-    await upsert(IDS.avgTurnaround, weekKey, week.avgTurnaroundDays.toFixed(1));
-    await upsert(IDS.upsellRevenue, weekKey, Math.round(week.revenueFromUpsellsCents / 100));
+    // Finals: count revenue with paymentType=final paid in this week (MDT boundaries)
+    const finals = paidRevenue.filter(r =>
+      r.paymentType === "final" && r.paidAt >= wStartUTC && r.paidAt <= wEndUTCFull
+    ).length;
 
-    // Stripe revenue for this week
+    // Sales, upsells, jobs, answer rate, turnaround from scorecard API (matches dashboard logic)
+    const sales = week.salesCount;
+    const upsellCents = week.revenueFromUpsellsCents;
+    const jobs = week.jobsCompleted;
+    const ar = week.answerRatePercent.toFixed(1);
+    const tt = week.avgTurnaroundDays.toFixed(1);
+
+    // Conversion rate using real leads
+    const cr = leads > 0 ? ((sales / leads) * 100).toFixed(1) : "0";
+
+    // Stripe revenue
     let stripeRev = 0;
     for (const p of payouts) {
       const ad = new Date((p.arrival_date || p.created) * 1000).toISOString().split("T")[0];
       if (ad >= week.weekStart && ad <= week.weekEnd) stripeRev += p.amount / 100;
     }
-    await upsert(IDS.revenue, weekKey, Math.round(stripeRev));
 
-    // Platform ratings (static for now — TODO: pull from Google API)
+    await upsert(IDS.leads, weekKey, leads);
+    await upsert(IDS.answerRate, weekKey, ar);
+    await upsert(IDS.conversion, weekKey, cr);
+    await upsert(IDS.sales, weekKey, sales);
+    await upsert(IDS.jobsCompleted, weekKey, jobs);
+    await upsert(IDS.finalsCollected, weekKey, finals);
+    await upsert(IDS.avgTurnaround, weekKey, tt);
+    await upsert(IDS.upsellRevenue, weekKey, Math.round(upsellCents / 100));
+    await upsert(IDS.revenue, weekKey, Math.round(stripeRev));
     await upsert(IDS.google, weekKey, "4.1");
     await upsert(IDS.angi, weekKey, "3.8");
     await upsert(IDS.bbb, weekKey, "1.0");
     count += 12;
 
-    console.log(`  ${weekKey}: leads=${totalLeads} ar=${week.answerRatePercent.toFixed(1)}% cr=${cr}% sold=${week.salesCount} jobs=${week.jobsCompleted} finals=${week.finalsCollected} tt=${week.avgTurnaroundDays.toFixed(1)}d rev=$${Math.round(stripeRev)} upsell=$${Math.round(week.revenueFromUpsellsCents / 100)}`);
+    console.log(`  ${weekKey}: leads=${leads} ar=${ar}% cr=${cr}% sold=${sales} jobs=${jobs} finals=${finals} tt=${tt}d rev=$${Math.round(stripeRev)} upsell=$${Math.round(upsellCents / 100)}`);
   }
   console.log(`  Total: ${count} entries`);
 }
