@@ -9,10 +9,12 @@ const db = new Client({ connectionString: process.env.DATABASE_URL });
 const IDS = {
   leads: "cmnghk4n2002eg0vp8xnlce1r", leadsGoogle: "f2284634-c2a4-478e-8978-5cb9c7295063",
   leadsAngi: "679f09f3-16d6-4d98-b749-289c61653813", leadsMeta: "be25698d-1704-463f-a2b5-4216707f0965",
+  leadsThumbtack: "b4cfb3ba-ded6-4342-87f6-2ad7fa897a62",
   answerRate: "cmo99tx3c00000ajvtdf2fsct", conversion: "cmnghk4qg002fg0vpvk7bjgas",
-  sales: "cmo98szor00000ajl0pd53jd7", jobsCompleted: "cmnghk4tt002gg0vp6b1ni46z",
-  finalsCollected: "cmoa7li1800000akvlcw9ys8a", revenue: "cmnghk4x5002hg0vplxap51fy",
-  avgTurnaround: "cmoa9su9w00000ai5l735u1wy", upsellRevenue: "cmo99rnyz00000ak16eovbe20",
+  sales: "cmo98szor00000ajl0pd53jd7", engineeringSold: "d1e9ea80-0ea6-40bf-b36e-62279e6eb185",
+  jobsCompleted: "cmnghk4tt002gg0vp6b1ni46z", finalsCollected: "cmoa7li1800000akvlcw9ys8a",
+  revenue: "cmnghk4x5002hg0vplxap51fy", avgTurnaround: "cmoa9su9w00000ai5l735u1wy",
+  upsellRevenue: "cmo99rnyz00000ak16eovbe20",
   google: "cmo97po5800000ajpg5fjh4wy", angi: "cmo97q9se00000al5mfa7ars1", bbb: "cmo97qnak00010al5qo6fjsfr",
 };
 
@@ -64,7 +66,7 @@ const weeks = [
 async function main() {
   await db.connect();
 
-  // Scorecard for jobs/upsells/turnaround
+  // Scorecard for jobs/turnaround/upsell revenue (line-item level logic we can't replicate)
   const scRes = await fetch(
     "https://victor-evo.vercel.app/api/v1/scorecards/company-weekly?from=2026-05-10&to=2026-05-30",
     { headers: { Authorization: `Bearer ${VICTOR_KEY}` } }
@@ -100,32 +102,33 @@ async function main() {
   for (let i = 0; i < weeks.length; i++) {
     const w = weeks[i];
     const sc = scData.data?.[i];
-    // MDT boundaries
+    // MDT boundaries (UTC-6)
     const wStartUTC = w.start + "T06:00:00.000Z";
     const nd = new Date(w.end + "T00:00:00Z");
     nd.setUTCDate(nd.getUTCDate() + 1);
     const wEndUTC = nd.toISOString().split("T")[0] + "T05:59:59.999Z";
 
-    // Leads + answer rate + lead sources
+    // === LEADS + ANSWER RATE + LEAD SOURCES ===
     const wClients = clients.filter(c => c.createdAt >= wStartUTC && c.createdAt <= wEndUTC);
     const totalLeads = wClients.length;
-    let noAnswer = 0, leadsGoogle = 0, leadsAngi = 0, leadsMeta = 0;
+    let excludeCount = 0, leadsGoogle = 0, leadsAngi = 0, leadsMeta = 0, leadsThumbtack = 0;
     for (const c of wClients) {
       const s = (c.status || "").toLowerCase();
-      if (s === "no_answer" || s === "never_answered") noAnswer++;
+      if (s === "new" || s === "no_answer" || s === "never_answered") excludeCount++;
       const src = (c.leadSource || "").toLowerCase();
       if (src.includes("google") || src === "gmb" || src === "gmb_inbound") leadsGoogle++;
       else if (src.includes("angi") || src.includes("terraform angie")) leadsAngi++;
       else if (src === "meta") leadsMeta++;
+      else if (src.includes("thumbtack")) leadsThumbtack++;
     }
-    const ar = totalLeads > 0 ? (((totalLeads - noAnswer) / totalLeads) * 100).toFixed(1) : "0";
+    const ar = totalLeads > 0 ? (((totalLeads - excludeCount) / totalLeads) * 100).toFixed(1) : "0";
 
-    // Sales + finals from revenue
+    // === SALES + ENGINEERING SOLD + FINALS ===
     const paidRev = revenue.filter(r => r.status === "paid" && r.paidAt && r.paidAt >= wStartUTC && r.paidAt <= wEndUTC);
-    // Sales: initial payments, excluding Engineering/3D service types (counted separately in Victor dashboard)
+
+    // Sales: initial payments, excluding Engineering/3D service types
     const initialPayments = paidRev.filter(r => r.paymentType === "initial");
     let sales = initialPayments.length;
-    // Exclude engineering/3D by checking the project serviceType
     for (const r of initialPayments) {
       if (r.projectId) {
         try {
@@ -138,13 +141,23 @@ async function main() {
         } catch {}
       }
     }
+
+    // Engineering sold: count engineering paymentType entries
+    const engSold = paidRev.filter(r => r.paymentType === "engineering").length;
+
+    // Finals
     const finals = paidRev.filter(r => r.paymentType === "final").length;
 
+    // Upsell revenue from scorecard (tracks line-item level upsell products across all payment types)
+    const upsellCents = sc ? sc.revenueFromUpsellsCents : 0;
+
+    // Jobs + turnaround from scorecard
     const jobs = sc ? sc.jobsCompleted : 0;
     const tt = sc ? sc.avgTurnaroundDays.toFixed(1) : "0";
-    const upsellCents = sc ? sc.revenueFromUpsellsCents : 0;
+
     const cr = totalLeads > 0 ? ((sales / totalLeads) * 100).toFixed(1) : "0";
 
+    // Stripe revenue
     let stripeRev = 0;
     for (const p of payouts) {
       const ad = new Date((p.arrival_date || p.created) * 1000).toISOString().split("T")[0];
@@ -155,9 +168,11 @@ async function main() {
     await upsert(IDS.leadsGoogle, w.start, leadsGoogle);
     await upsert(IDS.leadsAngi, w.start, leadsAngi);
     await upsert(IDS.leadsMeta, w.start, leadsMeta);
+    await upsert(IDS.leadsThumbtack, w.start, leadsThumbtack);
     await upsert(IDS.answerRate, w.start, ar);
     await upsert(IDS.conversion, w.start, cr);
     await upsert(IDS.sales, w.start, sales);
+    await upsert(IDS.engineeringSold, w.start, engSold);
     await upsert(IDS.jobsCompleted, w.start, jobs);
     await upsert(IDS.finalsCollected, w.start, finals);
     await upsert(IDS.avgTurnaround, w.start, tt);
@@ -167,7 +182,7 @@ async function main() {
     await upsert(IDS.angi, w.start, "3.8");
     await upsert(IDS.bbb, w.start, "1.0");
 
-    console.log(`${w.start}: leads=${totalLeads} (G=${leadsGoogle} A=${leadsAngi} M=${leadsMeta}) ar=${ar}% cr=${cr}% sold=${sales} jobs=${jobs} finals=${finals} tt=${tt}d rev=$${Math.round(stripeRev)} upsell=$${Math.round(upsellCents / 100)}`);
+    console.log(`${w.start}: leads=${totalLeads} (G=${leadsGoogle} A=${leadsAngi} M=${leadsMeta} T=${leadsThumbtack}) ar=${ar}% cr=${cr}% sold=${sales} eng=${engSold} jobs=${jobs} finals=${finals} tt=${tt}d rev=$${Math.round(stripeRev)} upsell=$${Math.round(upsellCents / 100)}`);
   }
 
   await db.end();

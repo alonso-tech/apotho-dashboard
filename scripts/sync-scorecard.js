@@ -153,6 +153,8 @@ async function syncEvolution(wStart, wEnd) {
     leadsGoogle: "f2284634-c2a4-478e-8978-5cb9c7295063",
     leadsAngi: "679f09f3-16d6-4d98-b749-289c61653813",
     leadsMeta: "be25698d-1704-463f-a2b5-4216707f0965",
+    leadsThumbtack: "b4cfb3ba-ded6-4342-87f6-2ad7fa897a62",
+    engineeringSold: "d1e9ea80-0ea6-40bf-b36e-62279e6eb185",
     answerRate: "cmo99tx3c00000ajvtdf2fsct",
     conversion: "cmnghk4qg002fg0vpvk7bjgas",
     sales: "cmo98szor00000ajl0pd53jd7",
@@ -189,21 +191,22 @@ async function syncEvolution(wStart, wEnd) {
   const weekClients = clients.filter(c => c.createdAt >= wStartUTC && c.createdAt <= wEndUTC);
   const totalLeads = weekClients.length;
 
-  // Answer rate: (total - no_answer - never_answered) / total
-  let noAnswer = 0;
+  // Answer rate: (total - new - no_answer - never_answered) / total
+  let excludeCount = 0;
   for (const c of weekClients) {
     const s = (c.status || "").toLowerCase();
-    if (s === "no_answer" || s === "never_answered") noAnswer++;
+    if (s === "new" || s === "no_answer" || s === "never_answered") excludeCount++;
   }
-  const ar = totalLeads > 0 ? (((totalLeads - noAnswer) / totalLeads) * 100).toFixed(1) : "0";
+  const ar = totalLeads > 0 ? (((totalLeads - excludeCount) / totalLeads) * 100).toFixed(1) : "0";
 
   // Lead sources
-  let leadsGoogle = 0, leadsAngi = 0, leadsMeta = 0;
+  let leadsGoogle = 0, leadsAngi = 0, leadsMeta = 0, leadsThumbtack = 0;
   for (const c of weekClients) {
     const src = (c.leadSource || "").toLowerCase();
     if (src.includes("google") || src === "gmb" || src === "gmb_inbound") leadsGoogle++;
     else if (src.includes("angi") || src.includes("terraform angie")) leadsAngi++;
     else if (src === "meta") leadsMeta++;
+    else if (src.includes("thumbtack")) leadsThumbtack++;
   }
 
   // 3. Fetch revenue for sales + finals
@@ -224,6 +227,7 @@ async function syncEvolution(wStart, wEnd) {
     }
   }
   const finals = paidRevenue.filter(r => r.paymentType === "final").length;
+  const engSold = paidRevenue.filter(r => r.paymentType === "engineering").length;
 
   // Use scorecard for upsells, jobs, turnaround (complex business logic)
   const jobs = sc.jobsCompleted;
@@ -258,9 +262,11 @@ async function syncEvolution(wStart, wEnd) {
   await upsert(IDS.leadsGoogle, wStart, leadsGoogle);
   await upsert(IDS.leadsAngi, wStart, leadsAngi);
   await upsert(IDS.leadsMeta, wStart, leadsMeta);
+  await upsert(IDS.leadsThumbtack, wStart, leadsThumbtack);
   await upsert(IDS.answerRate, wStart, ar);
   await upsert(IDS.conversion, wStart, cr);
   await upsert(IDS.sales, wStart, sales);
+  await upsert(IDS.engineeringSold, wStart, engSold);
   await upsert(IDS.jobsCompleted, wStart, jobs);
   await upsert(IDS.finalsCollected, wStart, finals);
   await upsert(IDS.avgTurnaround, wStart, tt);
@@ -270,7 +276,7 @@ async function syncEvolution(wStart, wEnd) {
   await upsert(IDS.angi, wStart, "3.8");
   await upsert(IDS.bbb, wStart, "1.0");
 
-  console.log(`  ${wStart}: leads=${totalLeads} (google=${leadsGoogle} angi=${leadsAngi} meta=${leadsMeta}) ar=${ar}% cr=${cr}% sold=${sales} jobs=${jobs} finals=${finals} tt=${tt}d rev=$${Math.round(stripeRev)} upsell=$${Math.round(upsellCents / 100)}`);
+  console.log(`  ${wStart}: leads=${totalLeads} (G=${leadsGoogle} A=${leadsAngi} M=${leadsMeta} T=${leadsThumbtack}) ar=${ar}% cr=${cr}% sold=${sales} eng=${engSold} jobs=${jobs} finals=${finals} tt=${tt}d rev=$${Math.round(stripeRev)} upsell=$${Math.round(upsellCents / 100)}`);
 }
 
 async function syncSentri(qStart, qEnd) {
