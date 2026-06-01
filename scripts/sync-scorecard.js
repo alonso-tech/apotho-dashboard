@@ -146,10 +146,13 @@ async function paginateVictorDesc(endpoint, dateField, cutoffISO) {
   return all;
 }
 
-async function syncEvolution(qStart, qEnd) {
+async function syncEvolution(wStart, wEnd) {
   console.log("\n=== Evolution Drafting (Victor APIs + Stripe) ===");
   const IDS = {
     leads: "cmnghk4n2002eg0vp8xnlce1r",
+    leadsGoogle: "f2284634-c2a4-478e-8978-5cb9c7295063",
+    leadsAngi: "679f09f3-16d6-4d98-b749-289c61653813",
+    leadsMeta: "be25698d-1704-463f-a2b5-4216707f0965",
     answerRate: "cmo99tx3c00000ajvtdf2fsct",
     conversion: "cmnghk4qg002fg0vpvk7bjgas",
     sales: "cmo98szor00000ajl0pd53jd7",
@@ -163,41 +166,77 @@ async function syncEvolution(qStart, qEnd) {
     bbb: "cmo97qnak00010al5qo6fjsfr",
   };
 
-  // Get week boundaries from Victor scorecard (used for week structure + answer rate + turnaround)
-  console.log(`  Fetching Victor scorecard for week structure...`);
+  // MDT = UTC-6. Victor dashboards use Mountain Time boundaries.
+  const wStartUTC = wStart + "T06:00:00.000Z";
+  const nextDay = new Date(wEnd + "T00:00:00Z");
+  nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+  const wEndUTC = nextDay.toISOString().split("T")[0] + "T05:59:59.999Z";
+  const cutoffISO = wStart + "T00:00:00.000Z";
+
+  // 1. Fetch scorecard for jobs/upsells/turnaround (complex server-side logic)
+  console.log(`  Fetching Victor scorecard...`);
   const victorRes = await fetch(
-    `https://victor-evo.vercel.app/api/v1/scorecards/company-weekly?from=${qStart}&to=${qEnd}`,
+    `https://victor-evo.vercel.app/api/v1/scorecards/company-weekly?from=${wStart}&to=${wEnd}`,
     { headers: { Authorization: `Bearer ${VICTOR_KEY}` } }
   );
   const victorData = await victorRes.json();
-  if (victorData.error) { console.error("  Victor error:", victorData.error); return; }
-  const weeks = victorData.data;
-  console.log(`  Weeks: ${weeks.length}`);
+  const sc = victorData.data?.[0];
+  if (!sc) { console.log("  No scorecard data for this week"); return; }
 
-  const cutoffISO = qStart + "T00:00:00.000Z";
+  // 2. Fetch clients for leads + answer rate + lead sources
+  console.log("  Fetching clients...");
+  const clients = await paginateVictorDesc("clients", "createdAt", cutoffISO);
+  const weekClients = clients.filter(c => c.createdAt >= wStartUTC && c.createdAt <= wEndUTC);
+  const totalLeads = weekClients.length;
 
-  // 1. Fetch ALL clients (leads) created since qStart
-  console.log("  Fetching clients (leads)...");
-  const allClients = await paginateVictorDesc("clients", "createdAt", cutoffISO);
-  console.log(`  Clients: ${allClients.length}`);
+  // Answer rate: (total - no_answer - never_answered) / total
+  let noAnswer = 0;
+  for (const c of weekClients) {
+    const s = (c.status || "").toLowerCase();
+    if (s === "no_answer" || s === "never_answered") noAnswer++;
+  }
+  const ar = totalLeads > 0 ? (((totalLeads - noAnswer) / totalLeads) * 100).toFixed(1) : "0";
 
-  // 2. Fetch ALL paid revenue since qStart
-  console.log("  Fetching revenue (sales/finals/upsells)...");
-  const allRevenue = await paginateVictorDesc("revenue", "paidAt", cutoffISO);
-  // Filter to only paid
-  const paidRevenue = allRevenue.filter(r => r.status === "paid" && r.paidAt);
-  console.log(`  Paid revenue entries: ${paidRevenue.length}`);
+  // Lead sources
+  let leadsGoogle = 0, leadsAngi = 0, leadsMeta = 0;
+  for (const c of weekClients) {
+    const src = (c.leadSource || "").toLowerCase();
+    if (src.includes("google") || src === "gmb" || src === "gmb_inbound") leadsGoogle++;
+    else if (src.includes("angi") || src.includes("terraform angie")) leadsAngi++;
+    else if (src === "meta") leadsMeta++;
+  }
 
-  // 3. Fetch completed projects since qStart
-  console.log("  Fetching projects (jobs completed)...");
-  const allProjects = await paginateVictorDesc("projects", "completedAt", cutoffISO);
-  const completedProjects = allProjects.filter(p => p.completedAt);
-  console.log(`  Completed projects: ${completedProjects.length}`);
+  // 3. Fetch revenue for sales + finals
+  console.log("  Fetching revenue...");
+  const allRevenue = await paginateVictorDesc("revenue", "createdAt", cutoffISO);
+  const paidRevenue = allRevenue.filter(r => r.status === "paid" && r.paidAt && r.paidAt >= wStartUTC && r.paidAt <= wEndUTC);
+  // Sales: initial payments, excluding Engineering/3D (Victor dashboard counts those separately)
+  const initialPayments = paidRevenue.filter(r => r.paymentType === "initial");
+  let sales = initialPayments.length;
+  for (const r of initialPayments) {
+    if (r.projectId) {
+      try {
+        const pRes = await fetch(`https://victor-evo.vercel.app/api/v1/projects/${r.projectId}`, { headers: { Authorization: `Bearer ${VICTOR_KEY}` } });
+        const pData = await pRes.json();
+        const svc = (pData.data?.serviceType || "").toLowerCase();
+        if (svc === "engineering" || svc === "3d") sales--;
+      } catch {}
+    }
+  }
+  const finals = paidRevenue.filter(r => r.paymentType === "final").length;
 
-  // 4. Fetch Stripe payouts for revenue
+  // Use scorecard for upsells, jobs, turnaround (complex business logic)
+  const jobs = sc.jobsCompleted;
+  const tt = sc.avgTurnaroundDays.toFixed(1);
+  const upsellCents = sc.revenueFromUpsellsCents;
+
+  // Conversion rate
+  const cr = totalLeads > 0 ? ((sales / totalLeads) * 100).toFixed(1) : "0";
+
+  // 4. Stripe revenue
   console.log("  Fetching Stripe payouts...");
-  const startTs = Math.floor(new Date(qStart + "T00:00:00Z").getTime() / 1000);
-  const endTs = Math.floor(new Date(qEnd + "T23:59:59Z").getTime() / 1000);
+  const startTs = Math.floor(new Date(wStart + "T00:00:00Z").getTime() / 1000);
+  const endTs = Math.floor(new Date(wEnd + "T23:59:59Z").getTime() / 1000);
   const payouts = [];
   let hasMore = true, startingAfter;
   while (hasMore) {
@@ -211,62 +250,27 @@ async function syncEvolution(qStart, qEnd) {
     if (data.data?.length) startingAfter = data.data[data.data.length - 1].id;
     else hasMore = false;
   }
-  console.log(`  Stripe payouts: ${payouts.length}`);
+  let stripeRev = 0;
+  for (const p of payouts) stripeRev += p.amount / 100;
 
-  // 5. Bucket into weeks using MDT (UTC-6) boundaries to match Victor dashboards
-  //    Leads + finals from raw APIs; sales/upsells/jobs/ar/tt from scorecard (complex business logic)
-  let count = 0;
-  for (const week of weeks) {
-    const weekKey = week.weekStart;
-    // MDT boundaries: Sunday 00:00 MDT = Sunday 06:00 UTC, Saturday 23:59 MDT = Sunday 05:59 UTC
-    const wStartUTC = week.weekStart + "T06:00:00.000Z";
-    const wEndUTC = week.weekEnd + "T06:00:00.000Z"; // start of next day in MDT = +1 day 06:00 UTC
-    const nextDay = new Date(week.weekEnd + "T00:00:00Z");
-    nextDay.setUTCDate(nextDay.getUTCDate() + 1);
-    const wEndUTCFull = nextDay.toISOString().split("T")[0] + "T05:59:59.999Z";
+  // 5. Upsert all
+  await upsert(IDS.leads, wStart, totalLeads);
+  await upsert(IDS.leadsGoogle, wStart, leadsGoogle);
+  await upsert(IDS.leadsAngi, wStart, leadsAngi);
+  await upsert(IDS.leadsMeta, wStart, leadsMeta);
+  await upsert(IDS.answerRate, wStart, ar);
+  await upsert(IDS.conversion, wStart, cr);
+  await upsert(IDS.sales, wStart, sales);
+  await upsert(IDS.jobsCompleted, wStart, jobs);
+  await upsert(IDS.finalsCollected, wStart, finals);
+  await upsert(IDS.avgTurnaround, wStart, tt);
+  await upsert(IDS.upsellRevenue, wStart, Math.round(upsellCents / 100));
+  await upsert(IDS.revenue, wStart, Math.round(stripeRev));
+  await upsert(IDS.google, wStart, "4.1");
+  await upsert(IDS.angi, wStart, "3.8");
+  await upsert(IDS.bbb, wStart, "1.0");
 
-    // Leads: count clients created in this week (MDT boundaries)
-    const leads = allClients.filter(c => c.createdAt >= wStartUTC && c.createdAt <= wEndUTCFull).length;
-
-    // Finals: count revenue with paymentType=final paid in this week (MDT boundaries)
-    const finals = paidRevenue.filter(r =>
-      r.paymentType === "final" && r.paidAt >= wStartUTC && r.paidAt <= wEndUTCFull
-    ).length;
-
-    // Sales, upsells, jobs, answer rate, turnaround from scorecard API (matches dashboard logic)
-    const sales = week.salesCount;
-    const upsellCents = week.revenueFromUpsellsCents;
-    const jobs = week.jobsCompleted;
-    const ar = week.answerRatePercent.toFixed(1);
-    const tt = week.avgTurnaroundDays.toFixed(1);
-
-    // Conversion rate using real leads
-    const cr = leads > 0 ? ((sales / leads) * 100).toFixed(1) : "0";
-
-    // Stripe revenue
-    let stripeRev = 0;
-    for (const p of payouts) {
-      const ad = new Date((p.arrival_date || p.created) * 1000).toISOString().split("T")[0];
-      if (ad >= week.weekStart && ad <= week.weekEnd) stripeRev += p.amount / 100;
-    }
-
-    await upsert(IDS.leads, weekKey, leads);
-    await upsert(IDS.answerRate, weekKey, ar);
-    await upsert(IDS.conversion, weekKey, cr);
-    await upsert(IDS.sales, weekKey, sales);
-    await upsert(IDS.jobsCompleted, weekKey, jobs);
-    await upsert(IDS.finalsCollected, weekKey, finals);
-    await upsert(IDS.avgTurnaround, weekKey, tt);
-    await upsert(IDS.upsellRevenue, weekKey, Math.round(upsellCents / 100));
-    await upsert(IDS.revenue, weekKey, Math.round(stripeRev));
-    await upsert(IDS.google, weekKey, "4.1");
-    await upsert(IDS.angi, weekKey, "3.8");
-    await upsert(IDS.bbb, weekKey, "1.0");
-    count += 12;
-
-    console.log(`  ${weekKey}: leads=${leads} ar=${ar}% cr=${cr}% sold=${sales} jobs=${jobs} finals=${finals} tt=${tt}d rev=$${Math.round(stripeRev)} upsell=$${Math.round(upsellCents / 100)}`);
-  }
-  console.log(`  Total: ${count} entries`);
+  console.log(`  ${wStart}: leads=${totalLeads} (google=${leadsGoogle} angi=${leadsAngi} meta=${leadsMeta}) ar=${ar}% cr=${cr}% sold=${sales} jobs=${jobs} finals=${finals} tt=${tt}d rev=$${Math.round(stripeRev)} upsell=$${Math.round(upsellCents / 100)}`);
 }
 
 async function syncSentri(qStart, qEnd) {
@@ -332,7 +336,17 @@ async function main() {
 
   console.log("Syncing (upsert mode — no data deleted)...");
 
-  await syncEvolution("2026-04-01", "2026-06-30");
+  // Only sync the current week. Historical data is already accurate.
+  const now = new Date();
+  const day = now.getDay(); // 0=Sun
+  const sun = new Date(now);
+  sun.setDate(sun.getDate() - day);
+  const currentWeekStart = sun.toISOString().split("T")[0];
+  const sat = new Date(sun);
+  sat.setDate(sat.getDate() + 6);
+  const currentWeekEnd = sat.toISOString().split("T")[0];
+  console.log(`Current week: ${currentWeekStart} to ${currentWeekEnd}`);
+  await syncEvolution(currentWeekStart, currentWeekEnd);
   await syncSentri("2026-04-01", "2026-06-30");
 
   await db.end();
