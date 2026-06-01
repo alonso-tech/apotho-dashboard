@@ -72,14 +72,30 @@ export default async function MeetingPage({ params }: PageProps) {
     orderBy: { createdAt: "asc" },
   });
 
+  // Fetch full scorecard data for the current quarter (same as scorecard page)
+  const { quarter: currentQ, year: currentYear } = getCurrentQuarter();
+  const startMonth = (currentQ - 1) * 3;
+  const quarterStart = new Date(Date.UTC(currentYear, startMonth, 1));
+  const quarterEnd = new Date(Date.UTC(currentYear, startMonth + 3, 0, 23, 59, 59, 999));
+  const firstDay = quarterStart.getUTCDay();
+  const firstSunday = new Date(quarterStart);
+  firstSunday.setUTCDate(firstSunday.getUTCDate() - firstDay);
+  const scorecardWeeks: Date[] = [];
+  const cursor = new Date(firstSunday);
+  while (cursor.getTime() <= quarterEnd.getTime()) {
+    scorecardWeeks.push(new Date(cursor));
+    cursor.setUTCDate(cursor.getUTCDate() + 7);
+  }
+
   const measurables = await prisma.measurable.findMany({
     where: { businessId: business.id },
     include: {
       entries: {
-        orderBy: { weekOf: "desc" },
-        take: 1,
+        where: { weekOf: { gte: scorecardWeeks[0], lte: quarterEnd } },
+        orderBy: { weekOf: "asc" },
       },
     },
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
   });
 
   const owners = business.owners.map((o) => ({ id: o.user.id, name: o.user.name }));
@@ -154,9 +170,14 @@ export default async function MeetingPage({ params }: PageProps) {
           name: m.name,
           goal: m.goal,
           unit: m.unit ?? "",
-          latestActual: m.entries[0]?.actual ?? null,
-          onTrack: m.entries[0]?.onTrack ?? null,
+          goalDirection: m.goalDirection || "gte",
+          entries: m.entries.map((e) => ({
+            weekOf: e.weekOf.toISOString(),
+            actual: e.actual,
+            onTrack: e.onTrack,
+          })),
         }))}
+        scorecardWeeks={scorecardWeeks.map((d) => d.toISOString())}
         previousTodos={previousTodos}
         previousIssues={previousIssues}
         owners={owners}

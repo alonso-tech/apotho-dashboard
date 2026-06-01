@@ -34,8 +34,8 @@ interface MeasurableData {
   name: string;
   goal: string;
   unit: string;
-  latestActual: string | null;
-  onTrack: boolean | null;
+  goalDirection: string;
+  entries: Array<{ weekOf: string; actual: string; onTrack: boolean }>;
 }
 
 interface Owner {
@@ -50,6 +50,7 @@ interface MeetingRunnerProps {
   meeting: MeetingData;
   rocks: RockData[];
   measurables: MeasurableData[];
+  scorecardWeeks: string[];
   previousTodos: TodoItem[];
   previousIssues: IssueItem[];
   owners: Owner[];
@@ -68,7 +69,7 @@ const SECTIONS = [
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function MeetingRunner({ meeting, rocks, measurables, previousTodos, previousIssues, owners, businessSlug }: MeetingRunnerProps) {
+export function MeetingRunner({ meeting, rocks, measurables, scorecardWeeks, previousTodos, previousIssues, owners, businessSlug }: MeetingRunnerProps) {
   const [section, setSection] = useState(0);
   const isCompleted = !!meeting.endedAt;
 
@@ -101,7 +102,7 @@ export function MeetingRunner({ meeting, rocks, measurables, previousTodos, prev
             <SegueSection meeting={meeting} owners={owners} readOnly={isCompleted} />
           )}
           {section === 1 && (
-            <ScorecardSection measurables={measurables} />
+            <ScorecardSection measurables={measurables} weeks={scorecardWeeks} />
           )}
           {section === 2 && (
             <PreviousTodosSection todos={previousTodos} rocks={rocks} meeting={meeting} owners={owners} />
@@ -219,41 +220,95 @@ function SegueSection({ meeting, owners, readOnly }: { meeting: MeetingData; own
 
 // ─── Section: Scorecard ───────────────────────────────────────────────────────
 
-function ScorecardSection({ measurables }: { measurables: MeasurableData[] }) {
+function formatWeekLabel(iso: string) {
+  const d = new Date(iso);
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+}
+
+function checkOnTrack(actual: number, goal: number, dir: string): boolean {
+  switch (dir) {
+    case "gte": return actual >= goal;
+    case "lte": return actual <= goal;
+    case "gt":  return actual > goal;
+    case "lt":  return actual < goal;
+    case "eq":  return actual === goal;
+    default:    return actual >= goal;
+  }
+}
+
+function ScorecardSection({ measurables, weeks }: { measurables: MeasurableData[]; weeks: string[] }) {
+  const now = new Date();
+  const todayTime = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+
+  function getEntry(m: MeasurableData, weekIso: string) {
+    const weekKey = weekIso.split("T")[0];
+    return m.entries.find((e) => e.weekOf.split("T")[0] === weekKey) ?? null;
+  }
+
   return (
     <div className="flex flex-col gap-2">
       <p className="text-sm text-muted-foreground mb-2">Review KPIs against targets.</p>
       {measurables.length === 0 && (
         <p className="text-sm text-muted-foreground">No measurables configured for this business.</p>
       )}
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto rounded-lg border">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b">
-              <th className="text-left py-2 pr-4 font-medium">Measurable</th>
-              <th className="text-right py-2 pr-4 font-medium">Goal</th>
-              <th className="text-right py-2 pr-4 font-medium">Actual</th>
-              <th className="text-center py-2 font-medium">Status</th>
+            <tr className="border-b bg-muted/50">
+              <th className="text-left py-2 px-3 font-medium min-w-[160px] sticky left-0 bg-muted/50 z-10">Measurable</th>
+              <th className="text-right py-2 px-3 font-medium sticky left-[160px] bg-muted/50 z-10">Goal</th>
+              {weeks.map((w) => {
+                const wDate = new Date(w);
+                const isCurrentWeek = todayTime >= wDate.getTime() && todayTime < wDate.getTime() + 7 * 86400000;
+                return (
+                  <th key={w} className={`text-center py-2 px-2 font-medium min-w-[56px] ${isCurrentWeek ? "bg-primary/10" : ""}`}>
+                    {formatWeekLabel(w)}
+                  </th>
+                );
+              })}
+              <th className="text-center py-2 px-2 font-medium min-w-[64px] bg-muted/70 border-l">Avg</th>
             </tr>
           </thead>
           <tbody>
             {measurables.map((m) => (
-              <tr key={m.id} className="border-b last:border-0">
-                <td className="py-2 pr-4">{m.name}</td>
-                <td className="text-right py-2 pr-4 text-muted-foreground">
-                  {m.goal}{m.unit ? ` ${m.unit}` : ""}
+              <tr key={m.id} className="border-b last:border-0 hover:bg-muted/20">
+                <td className="py-2 px-3 sticky left-0 bg-card z-10">
+                  <span className="font-medium">{m.name}</span>
+                  {m.unit && <span className="text-xs text-muted-foreground ml-1">({m.unit})</span>}
                 </td>
-                <td className="text-right py-2 pr-4">
-                  {m.latestActual !== null ? `${m.latestActual}${m.unit ? ` ${m.unit}` : ""}` : "—"}
-                </td>
-                <td className="text-center py-2">
-                  {m.onTrack === null ? (
-                    <span className="text-muted-foreground">—</span>
-                  ) : m.onTrack ? (
-                    <span className="inline-block w-3 h-3 rounded-full bg-green-500" title="On track" />
-                  ) : (
-                    <span className="inline-block w-3 h-3 rounded-full bg-red-500" title="Off track" />
-                  )}
+                <td className="text-right py-2 px-3 sticky left-[160px] bg-card z-10 text-muted-foreground">{m.goal}</td>
+                {weeks.map((w) => {
+                  const entry = getEntry(m, w);
+                  const wDate = new Date(w);
+                  const isCurrentWeek = todayTime >= wDate.getTime() && todayTime < wDate.getTime() + 7 * 86400000;
+                  return (
+                    <td key={w} className={`text-center py-1 px-1 ${isCurrentWeek ? "bg-primary/5" : ""}`}>
+                      <span className={`inline-block w-full h-8 leading-8 rounded px-1 text-xs font-medium ${
+                        entry
+                          ? entry.onTrack
+                            ? "bg-green-100 text-green-700"
+                            : "bg-red-100 text-red-700"
+                          : "text-muted-foreground"
+                      }`}>
+                        {entry?.actual ?? "—"}
+                      </span>
+                    </td>
+                  );
+                })}
+                <td className="text-center py-1 px-1 bg-muted/30 border-l">
+                  {(() => {
+                    const vals = weeks.map((w) => getEntry(m, w)).filter((e) => e != null).map((e) => parseFloat(e!.actual)).filter((v) => !isNaN(v));
+                    if (vals.length === 0) return <span className="text-xs text-muted-foreground">—</span>;
+                    const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+                    const goalNum = parseFloat(m.goal.replace(/,/g, ""));
+                    const onTrack = !isNaN(goalNum) ? checkOnTrack(avg, goalNum, m.goalDirection) : false;
+                    const formatted = avg >= 1000 ? Math.round(avg).toLocaleString() : avg % 1 === 0 ? String(avg) : avg.toFixed(1);
+                    return (
+                      <span className={`inline-block w-full h-8 leading-8 rounded px-1 text-xs font-semibold ${onTrack ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                        {formatted}
+                      </span>
+                    );
+                  })()}
                 </td>
               </tr>
             ))}
