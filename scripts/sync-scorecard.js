@@ -279,7 +279,7 @@ async function syncEvolution(wStart, wEnd) {
   console.log(`  ${wStart}: leads=${totalLeads} (G=${leadsGoogle} A=${leadsAngi} M=${leadsMeta} T=${leadsThumbtack}) ar=${ar}% cr=${cr}% sold=${sales} eng=${engSold} jobs=${jobs} finals=${finals} tt=${tt}d rev=$${Math.round(stripeRev)} upsell=$${Math.round(upsellCents / 100)}`);
 }
 
-async function syncSentri(qStart, qEnd) {
+async function syncSentri(wStart, wEnd) {
   console.log("\n=== Sentri Homes ===");
   const DB = { leads: "2f518d01-e1b6-8002-b83a-e4022123e913", commissions: "32718d01-e1b6-81e3-8af9-e17758672af2" };
   const IDS = {
@@ -292,10 +292,8 @@ async function syncSentri(qStart, qEnd) {
     googleRating: "cmo99bgit00050ajsdr2ibtz2",
   };
 
-  const weeks = buildWeeks(qStart, qEnd);
-  const dataStart = weeks[0].start;
-  const df = { on_or_after: dataStart, on_or_before: qEnd };
-  console.log(`  Fetching data from ${dataStart}...`);
+  const df = { on_or_after: wStart, on_or_before: wEnd };
+  console.log(`  Fetching data for ${wStart} to ${wEnd}...`);
   const [soldRaw, finalPaidRaw, commsRaw] = await Promise.all([
     queryNotion(SENTRI_KEY, DB.leads, { property: "Initial Paid Date", date: df }),
     queryNotion(SENTRI_KEY, DB.leads, { property: "Final Paid Date", date: df }),
@@ -305,36 +303,31 @@ async function syncSentri(qStart, qEnd) {
   const validFP = finalPaidRaw.filter((l) => (l.properties?.["Final Paid Date"]?.date?.start || "").startsWith("2026-"));
   console.log(`  Sold: ${soldRaw.length}, Final Paid (2026): ${validFP.length}, Comms: ${commsRaw.length}`);
 
-  let count = 0;
-  for (const week of weeks) {
-    let sales = 0, jobs = 0, rev = 0, homeBuild = 0;
-    for (const l of soldRaw) {
-      const d = l.properties?.["Initial Paid Date"]?.date?.start;
-      if (dateInRange(d, week.start, week.end)) {
-        sales++;
-        const lt = (l.properties?.["Lead Type"]?.rich_text?.[0]?.plain_text || "").toLowerCase();
-        if (lt.includes("home builder") || lt.includes("home building") || lt.includes("custom home")) homeBuild++;
-      }
+  let sales = 0, jobs = 0, rev = 0, homeBuild = 0;
+  for (const l of soldRaw) {
+    const d = l.properties?.["Initial Paid Date"]?.date?.start;
+    if (dateInRange(d, wStart, wEnd)) {
+      sales++;
+      const lt = (l.properties?.["Lead Type"]?.rich_text?.[0]?.plain_text || "").toLowerCase();
+      if (lt.includes("home builder") || lt.includes("home building") || lt.includes("custom home")) homeBuild++;
     }
-    for (const l of validFP) {
-      if (dateInRange(l.properties?.["Final Paid Date"]?.date?.start, week.start, week.end)) jobs++;
-    }
-    for (const c of commsRaw) {
-      const d = c.properties?.["Transaction Date"]?.date?.start;
-      if (dateInRange(d, week.start, week.end)) rev += c.properties?.["Transaction Amount"]?.number || 0;
-    }
-
-    await upsert(IDS.sales, week.key, sales);
-    await upsert(IDS.jobsCompleted, week.key, jobs);
-    await upsert(IDS.revenue, week.key, Math.round(rev));
-    await upsert(IDS.homeBuildingSales, week.key, homeBuild);
-    await upsert(IDS.licensing, week.key, 0);
-    await upsert(IDS.googleLocations, week.key, 0);
-    await upsert(IDS.googleRating, week.key, 0);
-    count += 7;
-    console.log(`  ${week.key}: sales=${sales} jobs=${jobs} rev=$${Math.round(rev)} homeBuild=${homeBuild}`);
   }
-  console.log(`  Total: ${count} entries`);
+  for (const l of validFP) {
+    if (dateInRange(l.properties?.["Final Paid Date"]?.date?.start, wStart, wEnd)) jobs++;
+  }
+  for (const c of commsRaw) {
+    const d = c.properties?.["Transaction Date"]?.date?.start;
+    if (dateInRange(d, wStart, wEnd)) rev += c.properties?.["Transaction Amount"]?.number || 0;
+  }
+
+  await upsert(IDS.sales, wStart, sales);
+  await upsert(IDS.jobsCompleted, wStart, jobs);
+  await upsert(IDS.revenue, wStart, Math.round(rev));
+  await upsert(IDS.homeBuildingSales, wStart, homeBuild);
+  await upsert(IDS.licensing, wStart, 0);
+  await upsert(IDS.googleLocations, wStart, 0);
+  await upsert(IDS.googleRating, wStart, 0);
+  console.log(`  ${wStart}: sales=${sales} jobs=${jobs} rev=$${Math.round(rev)} homeBuild=${homeBuild}`);
 }
 
 async function main() {
@@ -353,7 +346,7 @@ async function main() {
   const currentWeekEnd = sat.toISOString().split("T")[0];
   console.log(`Current week: ${currentWeekStart} to ${currentWeekEnd}`);
   await syncEvolution(currentWeekStart, currentWeekEnd);
-  await syncSentri("2026-04-01", "2026-06-30");
+  await syncSentri(currentWeekStart, currentWeekEnd);
 
   await db.end();
   console.log("\nDone!");
