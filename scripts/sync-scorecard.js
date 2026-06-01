@@ -272,8 +272,8 @@ async function syncEvolution(wStart, wEnd) {
   await upsert(IDS.avgTurnaround, wStart, tt);
   await upsert(IDS.upsellRevenue, wStart, Math.round(upsellCents / 100));
   await upsert(IDS.revenue, wStart, Math.round(stripeRev));
-  await upsert(IDS.google, wStart, "4.1");
-  await upsert(IDS.angi, wStart, "3.8");
+  await upsert(IDS.google, wStart, "4.2");
+  await upsert(IDS.angi, wStart, "3.6");
   await upsert(IDS.bbb, wStart, "1.0");
 
   console.log(`  ${wStart}: leads=${totalLeads} (G=${leadsGoogle} A=${leadsAngi} M=${leadsMeta} T=${leadsThumbtack}) ar=${ar}% cr=${cr}% sold=${sales} eng=${engSold} jobs=${jobs} finals=${finals} tt=${tt}d rev=$${Math.round(stripeRev)} upsell=$${Math.round(upsellCents / 100)}`);
