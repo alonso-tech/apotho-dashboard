@@ -154,6 +154,32 @@ async function syncEvolution(qStart, qEnd) {
   if (victorData.error) { console.error("  Victor error:", victorData.error); return; }
   console.log(`  Victor weeks: ${victorData.data.length}`);
 
+  // 1b. Count TOTAL leads per week from Victor clients API (scorecard filters out junk)
+  console.log("  Counting total leads from clients API...");
+  const leadCounts = {};
+  let page = 1, pageDone = false;
+  const cutoffISO = qStart + "T00:00:00.000Z";
+  while (!pageDone) {
+    const cRes = await fetch(
+      `https://victor-evo.vercel.app/api/v1/clients?limit=100&sort=createdAt&order=desc&page=${page}`,
+      { headers: { Authorization: `Bearer ${VICTOR_KEY}` } }
+    );
+    const cData = await cRes.json();
+    for (const client of cData.data || []) {
+      if (client.createdAt < cutoffISO) { pageDone = true; break; }
+      const dateStr = client.createdAt.split("T")[0];
+      for (const week of victorData.data) {
+        if (dateStr >= week.weekStart && dateStr <= week.weekEnd) {
+          leadCounts[week.weekStart] = (leadCounts[week.weekStart] || 0) + 1;
+          break;
+        }
+      }
+    }
+    if (!cData.data?.length || page >= cData.meta.totalPages) pageDone = true;
+    page++;
+  }
+  console.log(`  Lead counts from clients API:`, JSON.stringify(leadCounts));
+
   // 2. Fetch Stripe payouts for revenue
   console.log("  Fetching Stripe payouts...");
   const startTs = Math.floor(new Date(qStart + "T00:00:00Z").getTime() / 1000);
@@ -184,10 +210,12 @@ async function syncEvolution(qStart, qEnd) {
       continue;
     }
 
-    // Victor data
-    await upsert(IDS.leads, weekKey, week.leadsByWeek);
+    // Victor data — use real lead count from clients API, recalculate conversion
+    const totalLeads = leadCounts[weekKey] || week.leadsByWeek;
+    const cr = totalLeads > 0 ? ((week.salesCount / totalLeads) * 100).toFixed(1) : "0";
+    await upsert(IDS.leads, weekKey, totalLeads);
     await upsert(IDS.answerRate, weekKey, week.answerRatePercent.toFixed(1));
-    await upsert(IDS.conversion, weekKey, week.conversionRatePercent.toFixed(1));
+    await upsert(IDS.conversion, weekKey, cr);
     await upsert(IDS.sales, weekKey, week.salesCount);
     await upsert(IDS.jobsCompleted, weekKey, week.jobsCompleted);
     await upsert(IDS.finalsCollected, weekKey, week.finalsCollected);
@@ -208,7 +236,7 @@ async function syncEvolution(qStart, qEnd) {
     await upsert(IDS.bbb, weekKey, "1.0");
     count += 12;
 
-    console.log(`  ${weekKey}: leads=${week.leadsByWeek} ar=${week.answerRatePercent.toFixed(1)}% cr=${week.conversionRatePercent.toFixed(1)}% sold=${week.salesCount} jobs=${week.jobsCompleted} finals=${week.finalsCollected} tt=${week.avgTurnaroundDays.toFixed(1)}d rev=$${Math.round(stripeRev)} upsell=$${Math.round(week.revenueFromUpsellsCents / 100)}`);
+    console.log(`  ${weekKey}: leads=${totalLeads} ar=${week.answerRatePercent.toFixed(1)}% cr=${cr}% sold=${week.salesCount} jobs=${week.jobsCompleted} finals=${week.finalsCollected} tt=${week.avgTurnaroundDays.toFixed(1)}d rev=$${Math.round(stripeRev)} upsell=$${Math.round(week.revenueFromUpsellsCents / 100)}`);
   }
   console.log(`  Total: ${count} entries`);
 }

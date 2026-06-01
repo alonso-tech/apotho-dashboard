@@ -110,9 +110,32 @@ export async function GET(request: Request) {
       const vw = victorData.data?.[0];
 
       if (vw) {
-        await upsertEntry(IDS.leads, week.key, String(vw.leadsByWeek));
+        // Count total leads from clients API (scorecard filters junk)
+        let totalLeads = vw.leadsByWeek;
+        try {
+          let pg = 1, pgDone = false, lc = 0;
+          const cutoff = week.start + "T00:00:00.000Z";
+          while (!pgDone) {
+            const cRes = await fetch(
+              `https://victor-evo.vercel.app/api/v1/clients?limit=100&sort=createdAt&order=desc&page=${pg}`,
+              { headers: { Authorization: `Bearer ${victorKey}` } }
+            );
+            const cData = await cRes.json();
+            for (const c of cData.data || []) {
+              if (c.createdAt < cutoff) { pgDone = true; break; }
+              const ds = c.createdAt.split("T")[0];
+              if (ds >= week.start && ds <= week.end) lc++;
+            }
+            if (!cData.data?.length || pg >= (cData.meta?.totalPages || 1)) pgDone = true;
+            pg++;
+          }
+          if (lc > 0) totalLeads = lc;
+        } catch { /* fall back to scorecard count */ }
+
+        const cr = totalLeads > 0 ? ((vw.salesCount / totalLeads) * 100).toFixed(1) : "0";
+        await upsertEntry(IDS.leads, week.key, String(totalLeads));
         await upsertEntry(IDS.answerRate, week.key, vw.answerRatePercent.toFixed(1));
-        await upsertEntry(IDS.conversion, week.key, vw.conversionRatePercent.toFixed(1));
+        await upsertEntry(IDS.conversion, week.key, cr);
         await upsertEntry(IDS.sales, week.key, String(vw.salesCount));
         await upsertEntry(IDS.jobsCompleted, week.key, String(vw.jobsCompleted));
         await upsertEntry(IDS.finalsCollected, week.key, String(vw.finalsCollected));
@@ -132,7 +155,7 @@ export async function GET(request: Request) {
         await upsertEntry(IDS.revenue, week.key, String(Math.round(stripeRev)));
 
         results.evolution = {
-          leads: vw.leadsByWeek, ar: vw.answerRatePercent.toFixed(1), cr: vw.conversionRatePercent.toFixed(1),
+          leads: totalLeads, ar: vw.answerRatePercent.toFixed(1), cr,
           sold: vw.salesCount, completed: vw.jobsCompleted, finals: vw.finalsCollected,
           avgTT: vw.avgTurnaroundDays.toFixed(1), stripeRev: Math.round(stripeRev),
           upsell: Math.round(vw.revenueFromUpsellsCents / 100),
